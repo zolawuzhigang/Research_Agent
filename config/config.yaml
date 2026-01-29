@@ -19,7 +19,7 @@ model:
 
   # API云上模型配置（当 provider="api" 时使用）
   # SiliconFlow OpenAI-compatible endpoint
-  api_base: "s"
+  api_base: ""
   api_key: ""
   
   # 本地部署模型配置（当 provider="local" 时使用）
