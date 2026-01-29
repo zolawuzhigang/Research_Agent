@@ -58,6 +58,8 @@ tools:
   enabled: []
   timeout: 10
   max_retries: 2
+  # 豆包策略：是否启用任务先验路由（三层判断：是否调工具/能力标签/属性标签）
+  use_task_router: false
 
 # Skills（可扫描加载的工具）
 skills:
