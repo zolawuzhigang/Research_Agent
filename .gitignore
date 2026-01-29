@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Python
 __pycache__/
 *.py[cod]
@@ -69,3 +70,7 @@ Thumbs.db
 # 比赛相关（避免泄露）
 submissions/
 results/
+=======
+*.agdai
+MAlonzo/**
+>>>>>>> a40dc6c5ace5dc2fd5e930027cce6e4e7cc10f5e
