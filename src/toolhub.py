@@ -582,7 +582,17 @@ class ToolHub:
             
             results_text.append(f"工具{i} ({source}):\n{truncated}")
         
-        prompt = f"""你是一个信息综合专家。请综合以下多个工具的执行结果，生成一个准确、全面的答案。
+        try:
+            from .prompts import get_prompt
+            prompt = get_prompt(
+                "toolhub_synthesize_results",
+                input_data_preview=str(input_data)[:200],
+                results_text=chr(10).join(results_text),
+            )
+        except Exception:
+            prompt = ""
+        if not prompt:
+            prompt = f"""你是一个信息综合专家。请综合以下多个工具的执行结果，生成一个准确、全面的答案。
 
 原始查询: {str(input_data)[:200]}
 

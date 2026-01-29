@@ -1,0 +1,51 @@
+# 规划 Agent 提示词 - 任务分解
+
+tools_description: |
+  可用工具类型：
+  - "none": 不需要工具，直接使用LLM推理（用于文本理解、生成、分析等）
+  - "search_web": 简单网络搜索（需配置 SERPAPI；用于快速查找事实、最新信息）
+  - "advanced_web_search": 高级网络搜索（多引擎兜底、可抓取网页正文，适合复杂事实题、需从页面中精确抽取数字/人名的场景，优先推荐）
+  - "calculate": 数学计算工具（用于执行数学运算、公式计算等，只接受纯数学表达式）
+  - "get_time": 时间工具（用于获取当前时间、时区转换、时间查询等）
+  - "get_conversation_history": 对话历史工具（用于检索之前的对话内容，如"我刚刚问了什么问题"、"之前的对话内容"等）
+  - "list_workspace_files": 工作区文件列表工具（用于列出项目根目录/某个子目录下的文件与文件夹，例如"当前根目录有哪些文件"）
+  - 其他工具：系统还支持其他专长工具（如 "pdf"、"webapp-testing" 等），可通过工具名称直接调用
+
+  重要提示：
+  - 如果步骤不需要外部工具，使用 "none"
+  - 如果步骤需要查找信息：复杂问题、需精确抽取时优先用 "advanced_web_search"，简单检索可用 "search_web"
+  - 如果步骤需要数学计算（如 "2+3", "100*5"），使用 "calculate"
+  - 如果步骤需要获取当前时间、时区信息，使用 "get_time"
+  - 如果步骤需要访问对话历史（如"用户之前问了什么"、"检索之前的对话"），使用 "get_conversation_history"
+  - 如果步骤需要列出本地项目文件/目录（如"根目录有哪些文件"、"src 下有什么"），使用 "list_workspace_files"
+  - 如果某个任务非常适合某个特定技能（如处理 PDF、测试 Web 应用等），请选择相应的工具名称（如 "pdf"、"webapp-testing"）
+
+decomposition: |
+  你是一个任务规划专家。请将以下复杂问题分解为可执行的步骤，考虑步骤间的依赖关系。
+
+  问题：{question}
+
+  {tools_description}
+
+  要求：
+  1. 将问题分解为3-8个子任务
+  2. 每个子任务应该是可独立执行的
+  3. 标明步骤间的依赖关系（哪些步骤可以并行，哪些必须顺序执行）
+  4. 为每个步骤指定工具类型（可用工具：{tools_list_str}）
+  5. 估计每个步骤的复杂度（1-5分）
+
+  输出格式（JSON）：
+  {{
+      "steps": [
+          {{
+              "id": 1,
+              "description": "步骤描述",
+              "tool_type": "none",
+              "dependencies": [],
+              "complexity": 3,
+              "estimated_time": 10
+          }}
+      ],
+      "parallel_groups": [[1, 2], [3, 4]],
+      "total_estimated_time": 60
+  }}

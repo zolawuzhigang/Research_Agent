@@ -165,56 +165,17 @@ class PlanningAgent:
         else:
             tools_list_str = ", ".join(available_tools)
         
-        tools_description = """
-可用工具类型：
-- "none": 不需要工具，直接使用LLM推理（用于文本理解、生成、分析等）
-- "search_web": 简单网络搜索（需配置 SERPAPI；用于快速查找事实、最新信息）
-- "advanced_web_search": 高级网络搜索（多引擎兜底、可抓取网页正文，适合复杂事实题、需从页面中精确抽取数字/人名的场景，优先推荐）
-- "calculate": 数学计算工具（用于执行数学运算、公式计算等，只接受纯数学表达式）
-- "get_time": 时间工具（用于获取当前时间、时区转换、时间查询等）
-- "get_conversation_history": 对话历史工具（用于检索之前的对话内容，如"我刚刚问了什么问题"、"之前的对话内容"等）
-- "list_workspace_files": 工作区文件列表工具（用于列出项目根目录/某个子目录下的文件与文件夹，例如“当前根目录有哪些文件”）
-- 其他工具：系统还支持其他专长工具（如 "pdf"、"webapp-testing" 等），可通过工具名称直接调用
-
-重要提示：
-- 如果步骤不需要外部工具，使用 "none"
-- 如果步骤需要查找信息：复杂问题、需精确抽取时优先用 "advanced_web_search"，简单检索可用 "search_web"
-- 如果步骤需要数学计算（如 "2+3", "100*5"），使用 "calculate"
-- 如果步骤需要获取当前时间、时区信息，使用 "get_time"
-- 如果步骤需要访问对话历史（如"用户之前问了什么"、"检索之前的对话"），使用 "get_conversation_history"
-- 如果步骤需要列出本地项目文件/目录（如“根目录有哪些文件”、“src 下有什么”），使用 "list_workspace_files"
-- 如果某个任务非常适合某个特定技能（如处理 PDF、测试 Web 应用等），请选择相应的工具名称（如 "pdf"、"webapp-testing"）
-"""
-        
-        prompt = f"""你是一个任务规划专家。请将以下复杂问题分解为可执行的步骤，考虑步骤间的依赖关系。
-
-问题：{question}
-
-{tools_description}
-
-要求：
-1. 将问题分解为3-8个子任务
-2. 每个子任务应该是可独立执行的
-3. 标明步骤间的依赖关系（哪些步骤可以并行，哪些必须顺序执行）
-4. 为每个步骤指定工具类型（可用工具：{tools_list_str}）
-5. 估计每个步骤的复杂度（1-5分）
-
-输出格式（JSON）：
-{{
-    "steps": [
-        {{
-            "id": 1,
-            "description": "步骤描述",
-            "tool_type": "none",
-            "dependencies": [],
-            "complexity": 3,
-            "estimated_time": 10
-        }}
-    ],
-    "parallel_groups": [[1, 2], [3, 4]],
-    "total_estimated_time": 60
-}}
-"""
+        try:
+            from ..prompts import get_prompt, get_prompt_raw
+        except ImportError:
+            get_prompt = lambda k, **kw: ""
+            get_prompt_raw = lambda k: ""
+        tools_description = get_prompt_raw("planning_tools_description").strip()
+        if not tools_description:
+            tools_description = "可用工具类型：none, search_web, advanced_web_search, calculate, get_time, get_conversation_history, list_workspace_files 等。"
+        prompt = get_prompt("planning_decomposition", question=question, tools_description=tools_description, tools_list_str=tools_list_str)
+        if not prompt:
+            prompt = f"请将以下问题分解为可执行步骤。问题：{question}\n可用工具：{tools_list_str}"
         if context:
             prompt += f"\n上下文信息：{json.dumps(context, ensure_ascii=False)}"
         
@@ -407,16 +368,18 @@ class ExecutionAgent:
         logger.info(f"[步骤{step_id}] LLM可用，开始直接推理")
 
         try:
-            # 构建推理提示词
             context_info = self._format_context(context) if context else ''
-            
-            prompt = f"""请回答以下问题：
-{step_desc}
-
-如果需要参考之前的步骤结果，请使用以下信息：
-{context_info}
-
-请直接给出答案，不要包含推理过程。"""
+            try:
+                from ..prompts import get_prompt
+                prompt = get_prompt(
+                    "execution_direct_reasoning",
+                    step_desc=step_desc,
+                    context_info=context_info,
+                )
+            except Exception:
+                prompt = f"请回答以下问题：\n{step_desc}\n\n如果需要参考之前的步骤结果，请使用以下信息：\n{context_info}\n\n请直接给出答案，不要包含推理过程。"
+            if not prompt:
+                prompt = f"请回答以下问题：\n{step_desc}\n\n参考信息：\n{context_info}\n\n请直接给出答案，不要包含推理过程。"
             
             # 使用异步方法（如果可用），否则在线程池中执行同步方法
             logger.info(f"[步骤{step.get('id')}] 开始调用LLM进行推理...")
@@ -1201,11 +1164,13 @@ class CoordinationAgent:
             question = self.state.get('question', '')
             if question and hasattr(self.planning_agent, 'llm') and self.planning_agent.llm:
                 try:
-                    prompt = f"""请直接回答以下问题，给出简洁准确的答案：
-
-问题：{question}
-
-请直接给出答案，不要包含推理过程。"""
+                    try:
+                        from ..prompts import get_prompt
+                        prompt = get_prompt("synthesis_fallback_direct_answer", question=question)
+                    except Exception:
+                        prompt = f"请直接回答以下问题，给出简洁准确的答案：\n\n问题：{question}\n\n请直接给出答案，不要包含推理过程。"
+                    if not prompt:
+                        prompt = f"请直接回答以下问题：\n\n问题：{question}\n\n请直接给出答案，不要包含推理过程。"
                     if hasattr(self.planning_agent.llm, 'generate_async'):
                         answer = await self.planning_agent.llm.generate_async(prompt)
                     else:
@@ -1219,7 +1184,12 @@ class CoordinationAgent:
                         return answer.strip()
                 except Exception as e:
                     logger.error(f"直接回答问题失败: {e}")
-            return "抱歉，我无法回答这个问题。"
+            try:
+                from ..prompts import get_prompt_raw
+                fallback = get_prompt_raw("synthesis_fallback_no_answer").strip()
+            except Exception:
+                fallback = "抱歉，我无法回答这个问题。"
+            return fallback or "抱歉，我无法回答这个问题。"
         
         # 如果有LLM，使用LLM合成
         if hasattr(self.planning_agent, 'llm') and self.planning_agent.llm:
@@ -1230,18 +1200,18 @@ class CoordinationAgent:
                     for i, r in enumerate(successful_results)
                 ])
                 
-                question = self.state.get('question', '')
-                if not question:
-                    question = "用户问题"
-                
-                prompt = f"""基于以下步骤的结果，请生成一个简洁、准确的最终答案。
-
-步骤结果：
-{context}
-
-问题：{question}
-
-请直接给出最终答案，不要包含推理过程或多余解释。"""
+                question = self.state.get('question', '') or "用户问题"
+                try:
+                    from ..prompts import get_prompt
+                    prompt = get_prompt(
+                        "synthesis_evidence_synthesis",
+                        context=context,
+                        question=question,
+                    )
+                except Exception:
+                    prompt = f"基于以下步骤的结果，请生成一个简洁、准确的最终答案。\n\n步骤结果：\n{context}\n\n问题：{question}\n\n请直接给出最终答案，不要包含推理过程或多余解释。"
+                if not prompt:
+                    prompt = f"基于以下步骤的结果，请生成最终答案。\n\n步骤结果：\n{context}\n\n问题：{question}\n\n请直接给出最终答案。"
                 
                 # 使用异步方法（如果可用），否则在线程池中执行同步方法
                 if hasattr(self.planning_agent.llm, 'generate_async'):

@@ -426,11 +426,17 @@ class AgentOrchestrator:
             return False
 
         if _is_simple_greeting(lower):
-            answer = (
-                "你好，我是为科研辅助和商业调研场景设计的多智能体 Research Agent，"
-                "可以帮你分解复杂问题、调用搜索/计算/时间/会话历史等工具，"
-                "并生成结构化的分析和报告。你可以直接用自然语言告诉我你的需求。"
-            )
+            try:
+                from ..prompts import get_prompt_raw
+                answer = get_prompt_raw("orchestrator_greeting_answer").strip()
+            except Exception:
+                answer = ""
+            if not answer:
+                answer = (
+                    "你好，我是为科研辅助和商业调研场景设计的多智能体 Research Agent，"
+                    "可以帮你分解复杂问题、调用搜索/计算/时间/会话历史等工具，"
+                    "并生成结构化的分析和报告。你可以直接用自然语言告诉我你的需求。"
+                )
             return {
                 "success": True,
                 "answer": answer,
@@ -493,11 +499,18 @@ class AgentOrchestrator:
         基于当前系统实际能力（ToolHub + 多Agent架构）构造自描述，
         避免LLM按“裸模型”错误描述自己。
         """
-        parts = []
-        parts.append("我是一个面向科研辅助、深度学习与商业调研场景的多智能体（Multi-Agent）系统。")
-        parts.append("内部包含规划Agent、执行Agent、验证Agent和协调Agent，可以对复杂问题进行分解、执行和结果校验。")
-
-        # 工具与技能
+        try:
+            from ..prompts import get_prompt_raw
+            intro = get_prompt_raw("orchestrator_capability_intro").strip()
+            tools_header = get_prompt_raw("orchestrator_capability_tools_header").strip()
+            tools_footer = get_prompt_raw("orchestrator_capability_tools_footer").strip()
+            memory = get_prompt_raw("orchestrator_capability_memory").strip()
+            examples = get_prompt_raw("orchestrator_capability_examples").strip()
+        except Exception:
+            intro = tools_header = tools_footer = memory = examples = ""
+        if not intro:
+            intro = "我是一个面向科研辅助、深度学习与商业调研场景的多智能体（Multi-Agent）系统。\n内部包含规划Agent、执行Agent、验证Agent和协调Agent，可以对复杂问题进行分解、执行和结果校验。"
+        parts = [intro]
         tool_lines = []
         try:
             # 优先从 ToolHub 读取；若不存在则退回 ToolRegistry
@@ -517,23 +530,17 @@ class AgentOrchestrator:
             pass
 
         if tool_lines:
-            parts.append("目前已接入的代表性工具/技能包括：")
+            if tools_header:
+                parts.append(tools_header)
             parts.extend(tool_lines)
-            parts.append(
-                "其中 `search_web` 用于信息检索，`calculate` 用于数学计算，"
-                "`get_time` 获取当前时间，`get_conversation_history` 用于查看对话历史，"
-                "skills/mcps 则以 Skill 目录和配置化方式扩展更多专业能力（如 PDF 处理、Web 测试等）。"
-            )
+            if tools_footer:
+                parts.append(tools_footer)
 
-        parts.append(
-            "在对话层面，我支持多轮对话记忆，可以理解上下文、执行多跳推理，"
-            "并在工具调用失败或被限流时进行友好降级，尽量给出可用的参考答案。"
-        )
+        if memory:
+            parts.append(memory)
 
-        parts.append(
-            "你可以让我：例如“帮我调研某个技术的发展趋势并给出报告”、"
-            "“分析一段代码的Bug并给修复建议”、“比较两篇论文的核心贡献”等，我会自动规划步骤并调用合适的工具。"
-        )
+        if examples:
+            parts.append(examples)
 
         return "\n".join(parts)
 
@@ -565,11 +572,18 @@ class AgentOrchestrator:
         questions = [str(m.get("content", "")).strip() for m in question_msgs if str(m.get("content", "")).strip()]
 
         if not questions:
-            # 英文/中文统一：无历史问题时
             en_trigger = ["what did i ask", "last question", "previous question", "what i asked"]
-            if any(k in (query or "").lower() for k in en_trigger):
-                return "There are no previous questions in this conversation yet."
-            return "目前对话中还没有检测到你之前明确提出的问题。"
+            try:
+                from ..prompts import get_prompt_raw
+                if any(k in (query or "").lower() for k in en_trigger):
+                    msg = get_prompt_raw("orchestrator_history_empty_en").strip()
+                    return msg or "There are no previous questions in this conversation yet."
+                msg = get_prompt_raw("orchestrator_history_empty_cn").strip()
+                return msg or "目前对话中还没有检测到你之前明确提出的问题。"
+            except Exception:
+                if any(k in (query or "").lower() for k in en_trigger):
+                    return "There are no previous questions in this conversation yet."
+                return "目前对话中还没有检测到你之前明确提出的问题。"
 
         last_question = questions[-1]
         total = len(questions)

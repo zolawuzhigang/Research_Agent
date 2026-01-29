@@ -25,9 +25,14 @@ def normalize_answer(raw_answer: str) -> str:
     # 2. 去除首尾空格
     normalized = normalized.strip()
     
-    # 3. 提取答案（如果包含"Answer:"前缀，提取后面的内容）
+    # 3. 提取答案（如果包含 "Answer:" 或 "答案：" 前缀，提取后面的内容）
     if "answer:" in normalized:
         normalized = normalized.split("answer:")[-1].strip()
+    if "答案：" in normalized or "答案:" in normalized:
+        for prefix in ("答案：", "答案:"):
+            if prefix in normalized:
+                normalized = normalized.split(prefix)[-1].strip()
+                break
     
     # 4. 处理数值格式（更保守的策略）
     # 只有当整个答案看起来是纯数字时才进行数值处理
