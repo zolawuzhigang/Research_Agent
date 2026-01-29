@@ -285,17 +285,48 @@ class AgentOrchestrator:
         except Exception as e:
             # 缓存不可用不影响主流程
             logger.debug(f"请求级缓存检查失败，继续主流程: {e}")
-        
+
+        # 可观测性：创建 TraceContext 并注入 context，供工作流/执行层记录工具调用、推理、证据整合等
+        run_context = dict(context) if context else {}
+        trace_ctx = None
+        try:
+            from ..config.config_loader import get_config
+            from ..observability import TraceContext, NullTraceContext
+            cfg = get_config()
+            obs = (cfg.get_section("observability") or {}) if cfg else {}
+            if obs.get("enabled"):
+                trace_ctx = TraceContext(
+                    max_events=int(obs.get("max_events", 200)),
+                    max_preview=int(obs.get("max_preview", 500)),
+                )
+                run_context["_trace"] = trace_ctx
+            else:
+                run_context["_trace"] = NullTraceContext()
+        except Exception as e:
+            logger.debug(f"可观测性初始化失败（忽略）: {e}")
+            run_context["_trace"] = None
+
         try:
             if self.use_multi_agent and self.workflow:
                 # 使用多Agent系统 + LangGraph工作流
-                result = await self.workflow.run(task, context)
+                result = await self.workflow.run(task, run_context)
             elif self.use_multi_agent and self.multi_agent:
                 # 使用多Agent系统（简化模式）
-                result = await self.multi_agent.process(task, context)
+                result = await self.multi_agent.process(task, run_context)
             else:
                 # 使用单Agent模式（向后兼容）
-                result = await self._process_single_agent(task, context)
+                result = await self._process_single_agent(task, run_context)
+
+            # 可观测性：将 trace 附带进返回结果，便于调试
+            if trace_ctx is not None and hasattr(trace_ctx, "to_dict"):
+                try:
+                    from ..config.config_loader import get_config
+                    obs_cfg = (get_config().get_section("observability") or {}) if get_config() else {}
+                    if obs_cfg.get("include_in_response", True):
+                        result = dict(result) if result else {}
+                        result["trace"] = trace_ctx.to_dict()
+                except Exception:
+                    pass
             
             # 添加助手回复到对话历史
             if result.get("success") and result.get("answer"):

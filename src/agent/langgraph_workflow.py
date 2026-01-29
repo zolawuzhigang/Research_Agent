@@ -115,13 +115,29 @@ class LangGraphWorkflow:
     async def _planning_node(self, state: WorkflowState) -> WorkflowState:
         """规划节点"""
         logger.info("工作流: 进入规划节点")
-        
+        metadata = state.get("metadata") or {}
+        trace = metadata.get("_trace")
+
+        if trace and hasattr(trace, "on_planning_start"):
+            trace.on_planning_start(state.get("question", "")[:500])
+
         planning_agent = self.agents.get("planning")
         if planning_agent:
-            plan = planning_agent.decompose_task(state["question"])
-            state["task_plan"] = plan
-            state["current_step"] = 0
-        
+            try:
+                plan = planning_agent.decompose_task(state["question"])
+                state["task_plan"] = plan
+                state["current_step"] = 0
+                steps = (plan or {}).get("steps", [])
+                if trace and hasattr(trace, "on_planning_end"):
+                    trace.on_planning_end(steps_count=len(steps), success=True)
+            except Exception as e:
+                if trace and hasattr(trace, "on_planning_end"):
+                    trace.on_planning_end(steps_count=0, success=False, error=str(e))
+                raise
+        else:
+            if trace and hasattr(trace, "on_planning_end"):
+                trace.on_planning_end(steps_count=0, success=False)
+
         return state
     
     async def _execution_node(self, state: WorkflowState) -> WorkflowState:
@@ -137,10 +153,9 @@ class LangGraphWorkflow:
             
             if current_step < len(steps):
                 step = steps[current_step]
-                result = await execution_agent.execute_step(
-                    step,
-                    {"step_results": state.get("step_results", [])}
-                )
+                # 传入 metadata（含 _trace）以便执行层记录工具调用/推理事件
+                ctx = {**(state.get("metadata") or {}), "step_results": state.get("step_results", [])}
+                result = await execution_agent.execute_step(step, ctx)
                 state["step_results"].append(result)
                 state["current_step"] = current_step + 1
         
@@ -166,36 +181,45 @@ class LangGraphWorkflow:
     async def _verification_node(self, state: WorkflowState) -> WorkflowState:
         """验证节点"""
         logger.info("工作流: 进入验证节点")
-        
+        metadata = state.get("metadata") or {}
+        trace = metadata.get("_trace")
         verification_agent = self.agents.get("verification")
         step_results = state.get("step_results", [])
-        
+
         if verification_agent and step_results:
             last_result = step_results[-1]
+            step_id = last_result.get("step_id")
+            if trace and hasattr(trace, "on_verification_start") and step_id is not None:
+                trace.on_verification_start(step_id)
             verification = await verification_agent.verify_result(
                 last_result,
                 {"step_results": step_results}
             )
-            
-            # 如果验证失败，记录错误
+            if trace and hasattr(trace, "on_verification_end") and step_id is not None:
+                trace.on_verification_end(
+                    step_id,
+                    verified=verification.get("verified", False),
+                    confidence=verification.get("confidence", 0.0),
+                )
             if not verification.get("verified"):
                 errors = state.get("errors", [])
                 errors.append(f"步骤验证失败: {verification.get('issues', [])}")
                 state["errors"] = errors
-        
+
         return state
     
     async def _synthesis_node(self, state: WorkflowState) -> WorkflowState:
-        """合成节点"""
+        """合成节点（证据整合）"""
         logger.info("工作流: 进入合成节点")
-        
-        # 使用简单逻辑合成最终答案：
-        # 优先选择「最近一个成功且有非空结果」的步骤，
-        # 避免因为最后一步失败/为空而丢弃前面已经生成的高质量答案。
+        metadata = state.get("metadata") or {}
+        trace = metadata.get("_trace")
         step_results = state.get("step_results", [])
+
+        if trace and hasattr(trace, "on_synthesis_start"):
+            trace.on_synthesis_start(step_results_count=len(step_results))
+
         if step_results:
             final_text = None
-            # 从后往前找第一个 success=True 且 result 非空的步骤
             for res in reversed(step_results):
                 if not res.get("success"):
                     continue
@@ -203,14 +227,18 @@ class LangGraphWorkflow:
                 if val:
                     final_text = val
                     break
-
             if not final_text:
                 final_text = "无法生成答案"
-
             state["final_answer"] = final_text
         else:
             state["final_answer"] = "无法生成答案"
-        
+
+        if trace and hasattr(trace, "on_synthesis_end"):
+            trace.on_synthesis_end(
+                success=bool(state.get("final_answer")),
+                answer_preview=state.get("final_answer") or "",
+            )
+
         return state
     
     async def run(self, question: str, context: Dict[str, Any] = None) -> Dict[str, Any]:

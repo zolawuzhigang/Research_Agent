@@ -330,22 +330,27 @@ class ExecutionAgent:
         
         step_id = step.get("id")
         step_desc = step.get("description", "未知步骤")
-        logger.info(f"ExecutionAgent: 执行步骤 {step_id} - {step_desc}")
-        
         tool_type = step.get("tool_type", "none")
+        logger.info(f"ExecutionAgent: 执行步骤 {step_id} - {step_desc}")
         logger.info(f"[步骤{step_id}] 工具类型: {tool_type}")
-        
+
+        trace = None
+        try:
+            from ..observability import get_trace_context_from_context
+            trace = get_trace_context_from_context(context)
+        except Exception:
+            pass
+        if trace and hasattr(trace, "on_step_start"):
+            trace.on_step_start(step_id or 0, step_desc, tool_type)
+
         try:
             if tool_type == "none":
-                # 不需要工具，直接推理
                 logger.info(f"[步骤{step_id}] 使用直接推理模式")
                 result = await self._direct_reasoning(step, context)
             else:
-                # 需要调用工具
                 logger.info(f"[步骤{step_id}] 使用工具模式: {tool_type}")
                 result = await self._execute_with_tool(step, context)
-            
-            # 验证结果
+
             if not result:
                 logger.warning(f"步骤 {step_id} 返回空结果")
                 result = {
@@ -353,12 +358,22 @@ class ExecutionAgent:
                     "success": False,
                     "error": "执行返回空结果"
                 }
-            
+
+            if trace and hasattr(trace, "on_step_end"):
+                trace.on_step_end(
+                    step_id or 0,
+                    result.get("success", False),
+                    result_preview=str(result.get("result", ""))[:500],
+                    error=result.get("error"),
+                    method=result.get("method", ""),
+                )
             logger.info(f"ExecutionAgent: 步骤 {step_id} 执行完成，成功={result.get('success', False)}")
             return result
-        
+
         except Exception as e:
             logger.error(f"执行步骤 {step_id} 时发生异常: {e}")
+            if trace and hasattr(trace, "on_step_end"):
+                trace.on_step_end(step_id or 0, False, error=str(e))
             return {
                 "step_id": step_id,
                 "success": False,
@@ -368,25 +383,31 @@ class ExecutionAgent:
     async def _direct_reasoning(self, step: Dict[str, Any], context: Dict[str, Any] = None) -> Dict[str, Any]:
         """直接推理（不使用工具）"""
         step_id = step.get("id")
-        
+        step_desc = step.get('description', '') or "处理任务"
+        trace = None
+        try:
+            from ..observability import get_trace_context_from_context
+            trace = get_trace_context_from_context(context)
+        except Exception:
+            pass
+        if trace and hasattr(trace, "on_reasoning_start"):
+            trace.on_reasoning_start(step_id or 0, step_desc)
+
         if not self.llm:
             logger.warning(f"[步骤{step_id}] LLM不可用，无法进行直接推理")
+            if trace and hasattr(trace, "on_reasoning_end"):
+                trace.on_reasoning_end(step_id or 0, False, error="LLM不可用")
             return {
                 "step_id": step_id,
                 "success": False,
                 "error": "LLM不可用",
                 "method": "direct_reasoning"
             }
-        
+
         logger.info(f"[步骤{step_id}] LLM可用，开始直接推理")
-        
+
         try:
             # 构建推理提示词
-            step_desc = step.get('description', '')
-            if not step_desc:
-                logger.warning("步骤描述为空")
-                step_desc = "处理任务"
-            
             context_info = self._format_context(context) if context else ''
             
             prompt = f"""请回答以下问题：
@@ -419,18 +440,30 @@ class ExecutionAgent:
                 
                 if not result or not result.strip():
                     logger.warning(f"[步骤{step.get('id')}] 直接推理返回空结果")
+                    if trace and hasattr(trace, "on_reasoning_end"):
+                        trace.on_reasoning_end(step.get("id") or 0, False, error="推理结果为空")
                     return {
                         "step_id": step.get("id"),
                         "success": False,
                         "error": "推理结果为空",
                         "method": "direct_reasoning"
                     }
+                if trace and hasattr(trace, "on_reasoning_end"):
+                    trace.on_reasoning_end(step.get("id") or 0, True, result_preview=result.strip()[:500])
+                return {
+                    "step_id": step.get("id"),
+                    "success": True,
+                    "result": result.strip(),
+                    "method": "direct_reasoning"
+                }
             except Exception as llm_error:
                 # 通用业务场景：限流/429/449/网关返回非标准格式
                 msg = str(llm_error)
                 lowered = msg.lower()
                 if ("rate limit" in lowered) or ("429" in lowered) or ("449" in lowered) or ("限流" in lowered) or ("too many" in lowered):
                     logger.warning(f"[步骤{step.get('id')}] LLM疑似被限流，触发用户可见降级: {msg}")
+                    if trace and hasattr(trace, "on_reasoning_end"):
+                        trace.on_reasoning_end(step.get("id") or 0, True, result_preview="限流降级")
                     return {
                         "step_id": step.get("id"),
                         "success": True,
@@ -438,16 +471,13 @@ class ExecutionAgent:
                         "method": "direct_reasoning_rate_limited_fallback"
                     }
                 logger.exception(f"[步骤{step.get('id')}] LLM调用过程中出错: {llm_error}")
+                if trace and hasattr(trace, "on_reasoning_end"):
+                    trace.on_reasoning_end(step.get("id") or 0, False, error=msg)
                 raise  # 重新抛出，让外层catch处理
-            
-            return {
-                "step_id": step.get("id"),
-                "success": True,
-                "result": result.strip(),
-                "method": "direct_reasoning"
-            }
         except ValueError as e:
             logger.error(f"直接推理参数错误: {e}")
+            if trace and hasattr(trace, "on_reasoning_end"):
+                trace.on_reasoning_end(step.get("id") or 0, False, error=str(e))
             return {
                 "step_id": step.get("id"),
                 "success": False,
@@ -456,6 +486,8 @@ class ExecutionAgent:
             }
         except Exception as e:
             logger.exception(f"直接推理失败: {e}")  # 使用 exception 记录完整堆栈
+            if trace and hasattr(trace, "on_reasoning_end"):
+                trace.on_reasoning_end(step.get("id") or 0, False, error=str(e))
             return {
                 "step_id": step.get("id"),
                 "success": False,
@@ -521,7 +553,13 @@ class ExecutionAgent:
         """使用工具执行"""
         tool_type = step.get("tool_type")
         step_id = step.get("id")
-        
+        trace = None
+        try:
+            from ..observability import get_trace_context_from_context
+            trace = get_trace_context_from_context(context)
+        except Exception:
+            pass
+
         if not tool_type:
             logger.warning(f"[步骤{step_id}] 工具类型未指定")
             return {
@@ -542,12 +580,13 @@ class ExecutionAgent:
                     tool_input_preview = "空"
                 logger.info(f"[步骤{step_id}] ToolHub输入: {tool_input_preview}")
 
-                # 对需要严格输入的工具做保护：例如 calculate 空输入则直接降级为推理
                 if tool_type == "calculate" and (tool_input is None or str(tool_input).strip() == ""):
                     logger.warning(f"[步骤{step_id}] 计算器工具输入为空，直接降级到推理，避免语法错误")
                     return await self._direct_reasoning(step, context)
 
-                # execute with fallback inside ToolHub
+                if trace and hasattr(trace, "on_tool_call_start"):
+                    trace.on_tool_call_start(step_id or 0, tool_type, tool_input)
+
                 tool_result = await self.tool_hub.execute(tool_type, tool_input, llm_client=self.llm)
                 if tool_result is None:
                     tool_result = {"success": False, "error": "toolhub_returned_none"}
@@ -555,6 +594,14 @@ class ExecutionAgent:
                     tool_result = {"success": True, "result": tool_result}
 
                 formatted_result = self._format_tool_result(tool_result, tool_type)
+                if trace and hasattr(trace, "on_tool_call_end"):
+                    trace.on_tool_call_end(
+                        step_id or 0,
+                        tool_type,
+                        tool_result.get("success", True),
+                        result_preview=formatted_result,
+                        error=tool_result.get("error"),
+                    )
                 return {
                     "step_id": step.get("id"),
                     "success": tool_result.get("success", True),
@@ -565,6 +612,8 @@ class ExecutionAgent:
                 }
             except Exception as e:
                 logger.error(f"[步骤{step_id}] ToolHub调用失败: {e}")
+                if trace and hasattr(trace, "on_tool_call_end"):
+                    trace.on_tool_call_end(step_id or 0, tool_type, False, error=str(e))
                 logger.warning(f"[步骤{step_id}] ToolHub失败，降级到直接推理")
                 return await self._direct_reasoning(step, context)
 

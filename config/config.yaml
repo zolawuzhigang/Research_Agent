@@ -82,3 +82,10 @@ performance:
   cache_enabled: true
   cache_ttl: 3600
   async_execution: true
+
+# 可观测性/调试：工具调用、中间推理、证据整合等环节的追踪
+observability:
+  enabled: false          # 设为 true 开启 trace，结果中携带 trace 便于调试
+  max_events: 200         # 单次请求最多记录事件数
+  max_preview: 500        # 每条事件的 input/output 预览最大字符数
+  include_in_response: true   # 是否在 API/process_task 返回中附带 trace 字段
