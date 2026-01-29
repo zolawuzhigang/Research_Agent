@@ -550,7 +550,10 @@ class ExecutionAgent:
                 if trace and hasattr(trace, "on_tool_call_start"):
                     trace.on_tool_call_start(step_id or 0, tool_type, tool_input)
 
-                tool_result = await self.tool_hub.execute(tool_type, tool_input, llm_client=self.llm)
+                task_ctx = (context or {}).get("task_ctx")
+                tool_result = await self.tool_hub.execute(
+                    tool_type, tool_input, llm_client=self.llm, task_ctx=task_ctx
+                )
                 if tool_result is None:
                     tool_result = {"success": False, "error": "toolhub_returned_none"}
                 elif not isinstance(tool_result, dict):
@@ -587,8 +590,9 @@ class ExecutionAgent:
                 logger.info(f"[步骤{step_id}] 工具名 '{tool_type}' 未找到，尝试按能力 '{inferred_cap}' 查找功能相似工具")
                 try:
                     tool_input = self._prepare_tool_input(step, context)
+                    task_ctx = (context or {}).get("task_ctx")
                     tool_result = await self.tool_hub.execute_by_capability(
-                        inferred_cap, tool_input, max_parallel=3, llm_client=self.llm
+                        inferred_cap, tool_input, max_parallel=3, llm_client=self.llm, task_ctx=task_ctx
                     )
                     if tool_result.get("success"):
                         formatted_result = self._format_tool_result(tool_result, tool_type)

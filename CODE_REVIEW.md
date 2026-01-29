@@ -98,10 +98,47 @@
 - 确保关键操作都有日志记录
 - 使用适当的日志级别（DEBUG, INFO, WARNING, ERROR）
 
+---
+
+## 2026-01 全代码检查（规划与工具调用策略优先）
+
+### 检查范围
+
+- 规划策略：`PlanningAgent`、`planning.yaml`、`langgraph_workflow._planning_node`
+- 工具调用策略：`task_router`、`tool_routing.yaml`、`ToolHub`、`ExecutionAgent._execute_with_tool`
+- 提示词：`src/prompts/*.yaml` 与代码中 `get_prompt`/`get_prompt_raw` 的 key 一致性
+- 与 `add/` 目录的冲突、配置一致性
+
+### 已修复 / 改进
+
+1. **规划节点传入 context**（`src/agent/langgraph_workflow.py`）  
+   - `_planning_node` 原只传 `state["question"]`，现增加 `context=state.get("metadata")`，便于规划层使用任务路由产生的 `task_ctx`（能力标签等）。
+2. **执行节点防御性检查**  
+   - `_execution_node` 在 `append` 前确保 `state["step_results"]` 存在，避免异常 state 导致 KeyError。
+3. **提示词 key 核对**  
+   - 所有引用已与 YAML 核对：`planning_*`、`execution_*`、`tool_routing_*`、`orchestrator_*`、`synthesis_*` 均存在且一致。
+
+### 结论（无冲突）
+
+- **add/tool 与 src/**：代码中无 `from add`/`import add`，`add/` 为独立或历史代码，与 `src` 无引用冲突。
+- **配置**：`config.yaml` 中 `tools.use_task_router`、`observability`、`performance` 等与 `orchestrator`/`task_router`/`toolhub` 使用方式一致。
+- **测试**：`tests/` 依赖 pytest，需先执行 `pip install pytest` 再运行测试；提示词与 agent 模块导入验证已通过。
+
+### 策略优先级小结
+
+| 策略           | 位置                     | 说明 |
+|----------------|--------------------------|------|
+| 任务先验路由   | `task_router.route_task` | 配置 `tools.use_task_router: true` 时先判断是否需调工具，并产出 capability_tags/task_ctx |
+| 规划分解       | `PlanningAgent.decompose_task` | 使用 `planning.yaml`，现可接收 context（含 task_ctx） |
+| 工具执行       | `ToolHub.execute` / `ExecutionAgent._execute_with_tool` | 优先按名称，再按能力相似 + task_ctx 打分 |
+| 合成           | `_synthesis_node`（简单取最后成功结果）/ `CoordinationAgent`（LLM 合成） | 图工作流用简单策略，直接调用多 Agent 时可用 evidence_synthesis |
+
+---
+
 ## 修复总结
 
-✅ **已修复**: 5个关键问题
+✅ **已修复**: 5个关键问题 + 本次规划/工具策略相关 2 处改进
 ⚠️ **需要关注**: 4个潜在问题
-📝 **建议改进**: 代码质量提升建议
+📝 **建议改进**: 代码质量提升建议；运行单元测试前需 `pip install pytest`
 
 所有修复已应用到代码中，代码现在应该可以正常运行。

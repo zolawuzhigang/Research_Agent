@@ -45,7 +45,8 @@ class ConversationHistoryTool(BaseTool):
             logger.warning("MemoryManager未设置，无法获取对话历史")
             return {
                 "success": False,
-                "error": "MemoryManager未设置",
+                "error": "MemoryMa"
+                         "nager未设置",
                 "query": query
             }
         

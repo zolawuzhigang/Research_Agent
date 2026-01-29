@@ -13,7 +13,7 @@ Conflict resolution:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from loguru import logger
 import asyncio
 import random
@@ -139,6 +139,75 @@ class ToolHub:
                 seen.add(key)
                 unique.append(cand)
         return unique
+
+    def score_candidates_by_task_context(
+        self,
+        candidates: List[ToolCandidate],
+        task_ctx: Dict[str, Any],
+        tool_name: str,
+    ) -> List[Tuple[int, ToolCandidate, float]]:
+        """
+        豆包策略：按「能力适配度→调用成本→属性匹配度→附加分」对候选动态打分。
+        task_ctx: capability_tags (list), attribute_tags (dict: 时效性/可靠性/成本敏感), adapt_carriers (list)
+        返回 [(原始下标, candidate, score), ...] 按 score 降序。
+        """
+        if not task_ctx or not candidates:
+            return [(i, c, 10.0 - c.priority) for i, c in enumerate(candidates)]
+
+        capability_tags = task_ctx.get("capability_tags") or []
+        attribute_tags = task_ctx.get("attribute_tags") or {}
+        # 能力适配度 (0-10)：工具 capabilities 与任务 capability_tags 的交集比例
+        def capability_fit(cand: ToolCandidate) -> float:
+            caps = cand.meta.get("capabilities") or []
+            if not isinstance(caps, list):
+                caps = []
+            cap_set = {str(x).strip().lower() for x in caps if x}
+            if not capability_tags:
+                return 5.0  # 无任务标签时中性
+            task_set = {str(x).strip().lower() for x in capability_tags if x}
+            inter = len(cap_set & task_set)
+            if inter == 0:
+                return 0.0  # 不匹配则排除
+            return min(10.0, 10.0 * inter / max(1, len(task_set)))
+
+        # 调用成本 (0-10)：tools 高、mcps 低
+        def cost_score(cand: ToolCandidate) -> float:
+            if cand.source == "tools":
+                return 9.0
+            if cand.source == "skills":
+                return 7.0
+            return 4.0
+
+        # 属性匹配 (0-10)：高可靠性/高时效/高成本敏感时本地优先，MCP 降权
+        def attribute_match(cand: ToolCandidate) -> float:
+            rel = (attribute_tags.get("可靠性") or "中").strip()
+            tim = (attribute_tags.get("时效性") or "中").strip()
+            cost = (attribute_tags.get("成本敏感") or "低").strip()
+            s = 5.0
+            if rel == "高":
+                s += (3.0 if cand.source == "tools" else 2.0 if cand.source == "skills" else -2.0)
+            elif rel == "低":
+                s += (0.0 if cand.source == "mcps" else 0.5)
+            if tim == "高":
+                s += (2.0 if cand.source == "tools" else 0.5 if cand.source == "skills" else -1.0)
+            if cost == "高":
+                s += (2.0 if cand.source == "tools" else 0.5 if cand.source == "skills" else -1.0)
+            return max(0.0, min(10.0, s))
+
+        # 附加分：最近成功 +1
+        last_idx = self._last_success_index.get(tool_name)
+        scored: List[Tuple[int, ToolCandidate, float]] = []
+        for i, c in enumerate(candidates):
+            cap = capability_fit(c)
+            if capability_tags and cap == 0.0:
+                continue  # 排除能力不匹配
+            cost = cost_score(c)
+            attr = attribute_match(c)
+            bonus = 1.0 if last_idx == i else 0.0
+            total = 0.5 * cap + 0.25 * cost + 0.25 * attr + bonus
+            scored.append((i, c, total))
+        scored.sort(key=lambda x: -x[2])
+        return scored
 
     def _get_timeout_config(self) -> float:
         """获取超时配置（带缓存）"""
@@ -310,31 +379,43 @@ class ToolHub:
         return best_idx
 
     async def execute_by_capability(
-        self, capability: str, input_data: Any, max_parallel: int = 3, llm_client = None
+        self,
+        capability: str,
+        input_data: Any,
+        max_parallel: int = 3,
+        llm_client=None,
+        task_ctx: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         基于能力标签并发调用功能相似的工具（不管名字是否相同）。
+        若提供 task_ctx，按豆包策略动态打分排序；否则按 priority 排序。
         支持混合策略：根据工具类型和数量决定是选最优还是综合回答。
         """
         cands = self.find_by_capability(capability)
         if not cands:
             return {
-                "success": False, 
+                "success": False,
                 "error": f"no_tools_with_capability: {capability}",
                 "suggestions": self._suggest_similar_capabilities(capability)
             }
 
-        # 按 priority 排序，优先高优先级工具
-        cands.sort(key=lambda c: c.priority)
-        # 随机打乱同优先级内的顺序，增强鲁棒性
-        grouped: Dict[int, List[ToolCandidate]] = {}
-        for c in cands:
-            grouped.setdefault(c.priority, []).append(c)
-        sorted_cands = []
-        for prio in sorted(grouped.keys()):
-            group = grouped[prio]
-            random.shuffle(group)
-            sorted_cands.extend(group)
+        if task_ctx:
+            # 豆包策略：按 task_ctx 动态打分排序
+            scored = self.score_candidates_by_task_context(cands, task_ctx, capability)
+            sorted_cands = [c for _, c, _ in scored]
+            if not sorted_cands:
+                sorted_cands = list(cands)
+        else:
+            # 按 priority 排序，优先高优先级工具
+            cands_sorted = sorted(cands, key=lambda c: c.priority)
+            grouped: Dict[int, List[ToolCandidate]] = {}
+            for c in cands_sorted:
+                grouped.setdefault(c.priority, []).append(c)
+            sorted_cands = []
+            for prio in sorted(grouped.keys()):
+                group = grouped[prio]
+                random.shuffle(group)
+                sorted_cands.extend(group)
 
         # 决定策略：如果相似工具 <= 2，全部调用；否则根据工具类型决定
         num_tools = len(sorted_cands)
@@ -689,17 +770,62 @@ class ToolHub:
             }
         }
 
-    async def execute(self, name: str, input_data: Any, llm_client=None) -> Dict[str, Any]:
+    async def execute_with_task_context(
+        self,
+        name: str,
+        input_data: Any,
+        task_ctx: Dict[str, Any],
+        llm_client=None,
+    ) -> Dict[str, Any]:
+        """
+        豆包策略：按 task_ctx 动态打分排序后，依次调用（每个候选仅重试 1 次），
+        同载体/跨载体回退，全部失败则返回最后一次错误。
+        """
+        cands = self._candidates_by_name.get(name) or []
+        if not cands:
+            return {"success": False, "error": f"tool_not_found: {name}"}
+
+        ordered = self.score_candidates_by_task_context(cands, task_ctx, name)
+        if not ordered:
+            # 全部被能力过滤掉，回退到按 priority 顺序
+            ordered = [(i, c, 10.0 - c.priority) for i, c in enumerate(cands)]
+            ordered.sort(key=lambda x: -x[2])
+
+        all_errors: List[str] = []
+        for idx, cand, _ in ordered:
+            res = await self._call_candidate(cand, input_data)
+            if res.get("success"):
+                async with self._update_lock:
+                    self._last_success_index[name] = idx
+                return res
+            all_errors.append(f"{cand.source}: {res.get('error', 'unknown')}")
+            # 仅重试 1 次
+            res2 = await self._call_candidate(cand, input_data)
+            if res2.get("success"):
+                async with self._update_lock:
+                    self._last_success_index[name] = idx
+                return res2
+            all_errors.append(f"{cand.source}(retry): {res2.get('error', 'unknown')}")
+
+        return {
+            "success": False,
+            "error": "all_candidates_failed",
+            "_meta": {"name": name, "errors": all_errors[:5]},
+        }
+
+    async def execute(self, name: str, input_data: Any, llm_client=None, task_ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Execute tool by name with fallback.
-        - 对同名的多个候选工具（tools/skills/mcps），会优先对最多3个进行并发调用，
-          从中选出“质量最优”的结果；
-        - 如果并发批次全部失败，再对剩余候选按优先级顺序依次尝试。
+        - 若提供 task_ctx，则按豆包策略：动态打分排序 + 每候选重试 1 次 + 回退。
+        - 否则沿用原逻辑：并发/综合 + 按 priority 回退。
         Returns a dict with at least {success: bool, ...}
         """
         cands = self._candidates_by_name.get(name) or []
         if not cands:
             return {"success": False, "error": f"tool_not_found: {name}"}
+
+        if task_ctx:
+            return await self.execute_with_task_context(name, input_data, task_ctx, llm_client)
 
         # 单一候选保留原有顺序逻辑
         if len(cands) == 1:

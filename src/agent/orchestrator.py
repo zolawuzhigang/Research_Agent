@@ -306,6 +306,37 @@ class AgentOrchestrator:
             logger.debug(f"可观测性初始化失败（忽略）: {e}")
             run_context["_trace"] = None
 
+        # 豆包策略：任务先验路由（可选）。若启用且判断为「无需调工具」则直接 LLM 回答后返回
+        try:
+            from ..config.config_loader import get_config
+            cfg = get_config()
+            tool_cfg = cfg.get_section("tools") or {}
+            use_task_router = bool(tool_cfg.get("use_task_router", False))
+            if use_task_router and self.tool_hub and self.multi_agent:
+                from ..agent.task_router import route_task
+                llm = getattr(self.multi_agent, "execution_agent", None) and getattr(self.multi_agent.execution_agent, "llm", None)
+                if llm:
+                    tool_names = [item["name"] for item in self.tool_hub.list_tools()]
+                    router_result = route_task(task, llm, tool_names)
+                    if not router_result.get("use_tools", True):
+                        answer = await self._direct_answer_without_tools(task, llm)
+                        if answer:
+                            self.memory.add_conversation("assistant", answer, {"confidence": 0.85})
+                            return {"success": True, "answer": answer, "confidence": 0.85, "reasoning": "任务路由判断无需调工具，直接回答。"}
+                        # 直接回答失败时返回兜底，避免再跑完整工作流造成重复 LLM 调用
+                        return {
+                            "success": False,
+                            "answer": "当前无法直接回答该问题，请稍后重试或换一种方式提问。",
+                            "reasoning": "任务路由判断无需调工具，但直接回答失败。",
+                        }
+                    run_context["task_ctx"] = {
+                        "capability_tags": router_result.get("capability_tags", []),
+                        "attribute_tags": router_result.get("attribute_tags", {}),
+                        "adapt_carriers": router_result.get("adapt_carriers", []),
+                    }
+        except Exception as e:
+            logger.debug(f"任务路由失败（忽略）: {e}")
+
         try:
             if self.use_multi_agent and self.workflow:
                 # 使用多Agent系统 + LangGraph工作流
@@ -374,6 +405,28 @@ class AgentOrchestrator:
                 "task": task
             }
     
+    async def _direct_answer_without_tools(self, task: str, llm: Any) -> Optional[str]:
+        """豆包策略：任务路由判断无需调工具时，由 LLM 直接回答。"""
+        if not task or not llm:
+            return None
+        try:
+            if hasattr(llm, "chat") and callable(llm.chat):
+                resp = llm.chat(
+                    messages=[
+                        {"role": "system", "content": "请直接回答用户问题，不要调用任何工具。回答简洁准确。"},
+                        {"role": "user", "content": task.strip()},
+                    ],
+                    max_tokens=1024,
+                    temperature=0.2,
+                )
+            else:
+                return None
+            text = (resp.get("content") or resp.get("text") or resp.get("response") or "") if isinstance(resp, dict) else (str(resp) if resp else "")
+            return text.strip() if text else None
+        except Exception as e:
+            logger.warning(f"直接回答失败: {e}")
+            return None
+
     async def _process_single_agent(self, task: str, context: Optional[Dict]) -> Dict[str, Any]:
         """
         单Agent模式处理（向后兼容）

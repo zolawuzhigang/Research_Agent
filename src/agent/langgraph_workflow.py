@@ -124,7 +124,11 @@ class LangGraphWorkflow:
         planning_agent = self.agents.get("planning")
         if planning_agent:
             try:
-                plan = planning_agent.decompose_task(state["question"])
+                # 传入 metadata 作为 context，便于规划层使用 task_ctx（能力标签等）
+                plan = planning_agent.decompose_task(
+                    state["question"],
+                    context=state.get("metadata"),
+                )
                 state["task_plan"] = plan
                 state["current_step"] = 0
                 steps = (plan or {}).get("steps", [])
@@ -153,9 +157,11 @@ class LangGraphWorkflow:
             
             if current_step < len(steps):
                 step = steps[current_step]
-                # 传入 metadata（含 _trace）以便执行层记录工具调用/推理事件
+                # 传入 metadata（含 _trace、task_ctx）以便执行层记录工具调用/推理事件
                 ctx = {**(state.get("metadata") or {}), "step_results": state.get("step_results", [])}
                 result = await execution_agent.execute_step(step, ctx)
+                if "step_results" not in state:
+                    state["step_results"] = []
                 state["step_results"].append(result)
                 state["current_step"] = current_step + 1
         
