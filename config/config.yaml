@@ -1,0 +1,84 @@
+# Agent配置文件
+
+# Agent基础配置
+agent:
+  name: "TianchiAgent"
+  version: "1.0.0"
+  mode: "production"  # development, production
+
+# 模型配置
+model:
+  # # 提供者类型: "api" (API云上模型) 或 "local" (本地部署模型)
+  # provider: "api"  # api, local, openai, custom, huggingface
+
+  # # API云上模型配置（当 provider="api" 时使用）
+  # api_base: "https://newapi.3173721.xyz/v1/chat/completions"
+  # api_key: "sk-DwBE5H6xxCV6I7i0q8v6rq3ZHauPuSq6fWVerxu7gJ9DmQoz"
+    # 提供者类型: "api" (API云上模型) 或 "local" (本地部署模型)
+  provider: "api"  # api, local, openai, custom, huggingface
+
+  # API云上模型配置（当 provider="api" 时使用）
+  # SiliconFlow OpenAI-compatible endpoint
+  api_base: "https://api.siliconflow.cn/v1/chat/completions"
+  api_key: "sk-hwcnbmzkafcexxqedhhdrocicavcekdkojfuqumvdcfxquqg"
+  
+  # 本地部署模型配置（当 provider="local" 时使用）
+  # model_path: "/path/to/local/model"  # 本地模型路径
+  # device: "cuda"  # cuda 或 cpu
+  # load_in_8bit: false  # 是否使用8bit量化
+  # load_in_4bit: false  # 是否使用4bit量化
+  
+  # # 通用配置
+  # model_name: "qwen3-max"  # 模型名称/ID
+  # temperature: 0.1
+  # max_tokens: 2000
+  # timeout: 60
+  
+  # 通用配置
+  model_name: "deepseek-ai/DeepSeek-V3.2"  # 模型名称/ID（可选: deepseek-ai/DeepSeek-V3, deepseek-ai/DeepSeek-V3.2）
+  temperature: 0.1
+  max_tokens: 2000
+  timeout: 60
+# 任务配置
+task:
+  max_retries: 3
+  timeout: 300
+  parallel_execution: true
+  max_parallel_tasks: 5
+
+# 日志配置
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  file: "logs/agent.log"
+  rotation: "10 MB"
+  retention: "7 days"
+
+# 工具配置
+tools:
+  enabled: []
+  timeout: 10
+  max_retries: 2
+
+# Skills（可扫描加载的工具）
+skills:
+  enabled: true
+  # 默认扫描 src/skills/*.py
+  directory: "src/skills"
+
+# MCP（配置驱动的扩展工具）
+mcps:
+  enabled: true
+  config_file: "src/config/mcp.local.json"
+  tools: []
+  
+# 记忆配置
+memory:
+  short_term_size: 100
+  long_term_enabled: true
+  context_window: 4096
+
+# 性能配置
+performance:
+  cache_enabled: true
+  cache_ttl: 3600
+  async_execution: true

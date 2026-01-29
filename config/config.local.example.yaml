@@ -1,0 +1,64 @@
+# 本地部署模型配置示例
+
+# Agent基础配置
+agent:
+  name: "TianchiAgent"
+  version: "1.0.0"
+  mode: "production"
+
+# 模型配置 - 本地部署模型
+model:
+  # 使用本地部署模型
+  provider: "local"
+  
+  # 本地模型路径（HuggingFace格式）
+  model_path: "/path/to/your/local/model"
+  
+  # 设备配置
+  device: "cuda"  # "cuda" 或 "cpu"
+  
+  # 量化配置（节省显存）
+  load_in_8bit: false  # 8bit量化
+  load_in_4bit: false  # 4bit量化
+  
+  # 通用配置
+  model_name: "qwen-7b-chat"  # 模型名称（用于日志）
+  temperature: 0.1
+  max_tokens: 2000
+  timeout: 60
+
+# 其他配置保持不变...
+task:
+  max_retries: 3
+  timeout: 300
+
+logging:
+  level: "INFO"
+  file: "logs/agent.log"
+
+tools:
+  enabled: []
+  timeout: 10
+  max_retries: 2
+
+memory:
+  short_term_size: 100
+  long_term_enabled: true
+
+performance:
+  cache_enabled: true
+  cache_ttl: 3600
+
+# Skills（可扫描加载的工具）
+skills:
+  enabled: true
+  # 默认扫描 src/skills
+  directory: "src/skills"
+
+# MCP（配置驱动的扩展工具）
+mcps:
+  enabled: true
+  # 通过单独的 MCP 配置文件来识别可用的 MCP 工具/服务
+  # 文件格式参考 Cursor 的 ~/.cursor/mcp.json（mcpServers 节点）
+  # 示例：src/config/mcp.local.json
+  config_file: "src/config/mcp.local.json"
