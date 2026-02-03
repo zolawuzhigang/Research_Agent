@@ -152,7 +152,9 @@ class ToolHub:
         返回 [(原始下标, candidate, score), ...] 按 score 降序。
         """
         if not task_ctx or not candidates:
-            return [(i, c, 10.0 - c.priority) for i, c in enumerate(candidates)]
+            # 不按固定priority排序，使用随机分数
+            import random
+            return [(i, c, random.uniform(0.0, 10.0)) for i, c in enumerate(candidates)]
 
         capability_tags = task_ctx.get("capability_tags") or []
         attribute_tags = task_ctx.get("attribute_tags") or {}
@@ -170,28 +172,26 @@ class ToolHub:
                 return 0.0  # 不匹配则排除
             return min(10.0, 10.0 * inter / max(1, len(task_set)))
 
-        # 调用成本 (0-10)：tools 高、mcps 低
+        # 调用成本 (0-10)：不再根据来源固定打分，使用随机分数
         def cost_score(cand: ToolCandidate) -> float:
-            if cand.source == "tools":
-                return 9.0
-            if cand.source == "skills":
-                return 7.0
-            return 4.0
+            import random
+            return random.uniform(5.0, 10.0)
 
-        # 属性匹配 (0-10)：高可靠性/高时效/高成本敏感时本地优先，MCP 降权
+        # 属性匹配 (0-10)：不根据工具来源加权，仅基于属性本身
         def attribute_match(cand: ToolCandidate) -> float:
             rel = (attribute_tags.get("可靠性") or "中").strip()
             tim = (attribute_tags.get("时效性") or "中").strip()
             cost = (attribute_tags.get("成本敏感") or "低").strip()
             s = 5.0
+            # 仅根据属性本身打分，不考虑工具来源
             if rel == "高":
-                s += (3.0 if cand.source == "tools" else 2.0 if cand.source == "skills" else -2.0)
+                s += 2.0
             elif rel == "低":
-                s += (0.0 if cand.source == "mcps" else 0.5)
+                s += 0.5
             if tim == "高":
-                s += (2.0 if cand.source == "tools" else 0.5 if cand.source == "skills" else -1.0)
+                s += 1.5
             if cost == "高":
-                s += (2.0 if cand.source == "tools" else 0.5 if cand.source == "skills" else -1.0)
+                s += 1.5
             return max(0.0, min(10.0, s))
 
         # 附加分：最近成功 +1
@@ -370,11 +370,9 @@ class ToolHub:
             else:
                 length_score = 0.5 * (1.0 - min((len(text) - 2000) / 5000.0, 0.5))  # 过长结果大幅降分
 
-            # 优先级评分
-            priority_score = 1.0 / (1 + cands[idx].priority)  # tools(0) > skills(1) > mcps(2)
-            
-            # 综合评分（可配置权重，当前：长度50% + 质量20% + 优先级30%）
-            score = 0.5 * length_score + 0.2 * quality_score + 0.3 * priority_score
+            # 不再使用优先级评分，更公平地评估
+            # 综合评分（可配置权重，当前：长度70% + 质量30%）
+            score = 0.7 * length_score + 0.3 * quality_score
 
             if score > best_score:
                 best_score = score
@@ -410,16 +408,9 @@ class ToolHub:
             if not sorted_cands:
                 sorted_cands = list(cands)
         else:
-            # 按 priority 排序，优先高优先级工具
-            cands_sorted = sorted(cands, key=lambda c: c.priority)
-            grouped: Dict[int, List[ToolCandidate]] = {}
-            for c in cands_sorted:
-                grouped.setdefault(c.priority, []).append(c)
-            sorted_cands = []
-            for prio in sorted(grouped.keys()):
-                group = grouped[prio]
-                random.shuffle(group)
-                sorted_cands.extend(group)
+            # 不按固定priority排序，随机顺序
+            sorted_cands = list(cands)
+            random.shuffle(sorted_cands)
 
         # 决定策略：如果相似工具 <= 2，全部调用；否则根据工具类型决定
         num_tools = len(sorted_cands)
@@ -842,14 +833,16 @@ class ToolHub:
         # 决定策略
         should_synthesize = self._should_synthesize(name, None, len(cands))
 
-        # 构造候选顺序：最近成功优先，然后按 priority
+        # 构造候选顺序：最近成功优先，不按固定priority排序
         base_order = list(range(len(cands)))
-        base_order.sort(key=lambda i: cands[i].priority)
+        # 移除固定的priority排序，让系统根据实际成功情况自动调整
         start_idx = self._last_success_index.get(name)
         if start_idx is not None and 0 <= start_idx < len(cands):
             if start_idx in base_order:
                 base_order.remove(start_idx)
             base_order.insert(0, start_idx)
+        # 随机打乱剩余顺序，避免固定模式
+        random.shuffle(base_order)
 
         # 根据策略决定批次大小
         if should_synthesize and len(cands) <= 2:
