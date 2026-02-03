@@ -5,7 +5,7 @@ fallback_direct_answer: |
 
   问题：{question}
 
-  请直接给出答案，不要包含推理过程。
+  请直接给出最标准的答案，不要包含推理过程或多余解释。
 
 evidence_synthesis: |
   基于以下步骤的结果，请生成一个简洁、准确的最终答案。
@@ -15,6 +15,6 @@ evidence_synthesis: |
 
   问题：{question}
 
-  请直接给出最终答案，不要包含推理过程或多余解释。
+  请直接给出最标准的答案，不要包含推理过程或多余解释。
 
 fallback_no_answer: "抱歉，我无法回答这个问题。"

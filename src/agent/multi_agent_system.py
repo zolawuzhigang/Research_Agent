@@ -177,7 +177,10 @@ class PlanningAgent:
         if not prompt:
             prompt = f"请将以下问题分解为可执行步骤。问题：{question}\n可用工具：{tools_list_str}"
         if context:
-            prompt += f"\n上下文信息：{json.dumps(context, ensure_ascii=False)}"
+            # 排除不可 JSON 序列化的 _trace，避免 NullTraceContext 导致序列化失败
+            ctx_serializable = {k: v for k, v in context.items() if k != "_trace"}
+            if ctx_serializable:
+                prompt += f"\n上下文信息：{json.dumps(ctx_serializable, ensure_ascii=False)}"
         
         return prompt
     
