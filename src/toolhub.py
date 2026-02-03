@@ -285,11 +285,15 @@ class ToolHub:
             
             return {"success": False, "error": f"tool_timeout_after_{timeout}s", "_meta": {"source": cand.source}}
         except asyncio.CancelledError:
-            # 任务被取消（正常情况）
-            duration = time.time() - start_time
-            metrics = get_metrics()
-            metrics.record_performance(f"tool_execution_{cand.name}", duration)
-            raise
+                # 任务被取消（正常情况）
+                duration = time.time() - start_time
+                try:
+                    from src.utils.metrics import get_metrics
+                    metrics = get_metrics()
+                    metrics.record_performance(f"tool_execution_{cand.name}", duration)
+                except (ImportError, AttributeError):
+                    pass  # 如果 metrics 不可用，忽略
+                raise
         except Exception as e:
             duration = time.time() - start_time
             logger.warning(f"ToolHub candidate exception: {cand.name} from {cand.source}: {e}")

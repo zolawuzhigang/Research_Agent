@@ -26,7 +26,7 @@ class SearchTool(BaseTool):
             description="使用搜索引擎搜索网络信息，适用于查找事实、最新信息、学术资料等"
         )
         self.api_key = api_key or os.getenv("SERPAPI_KEY")
-        self.base_url = "https://baidu.com/search"
+        self.base_url = "https://serpapi.com/search"
     
     async def execute(self, input_data: Any) -> Dict[str, Any]:
         """

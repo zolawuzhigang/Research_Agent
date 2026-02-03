@@ -17,16 +17,22 @@ class CalculatorTool(BaseTool):
             description="执行数学计算，支持基本四则运算、幂运算等"
         )
     
-    async def execute(self, expression: str) -> Dict[str, Any]:
+    async def execute(self, input_data: Any) -> Dict[str, Any]:
         """
         执行计算
         
         Args:
-            expression: 数学表达式（如 "2 + 3 * 4"）
+            input_data: 数学表达式（可为str或dict）
         
         Returns:
             计算结果
         """
+        # 处理输入数据
+        if isinstance(input_data, dict):
+            expression = str(input_data.get("expression", ""))
+        else:
+            expression = str(input_data or "")
+        
         logger.info(f"CalculatorTool: 计算 - {expression}")
         
         try:

@@ -17,16 +17,22 @@ class TimeTool(BaseTool):
             description="获取当前时间、时区转换、时间计算等时间相关操作"
         )
     
-    async def execute(self, query: str) -> Dict[str, Any]:
+    async def execute(self, input_data: Any) -> Dict[str, Any]:
         """
         执行时间相关操作
         
         Args:
-            query: 时间查询（如 "current_time", "timezone:Asia/Shanghai"）
+            input_data: 时间查询（可为str或dict）
         
         Returns:
             时间信息
         """
+        # 处理输入数据
+        if isinstance(input_data, dict):
+            query = str(input_data.get("query", "current_time"))
+        else:
+            query = str(input_data or "current_time")
+        
         logger.info(f"TimeTool: 处理时间查询 - {query}")
         
         try:
