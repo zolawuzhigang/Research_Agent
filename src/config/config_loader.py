@@ -138,8 +138,17 @@ class ConfigLoader:
         return value if value is not None else default
     
     def get_section(self, section: str) -> Dict[str, Any]:
-        """获取配置节"""
+        """获取配置段落"""
         return self.config.get(section, {})
+    
+    def get_log_config(self) -> Dict[str, Any]:
+        """获取日志配置"""
+        return self.config.get("logging", {
+            "level": "INFO",
+            "file": "logs/agent.log",
+            "rotation": "10 MB",
+            "retention": "7 days"
+        })
     
     def update(self, key: str, value: Any):
         """更新配置值"""

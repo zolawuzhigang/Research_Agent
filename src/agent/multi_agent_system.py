@@ -8,6 +8,9 @@ import json
 import time
 from loguru import logger
 
+# 导入提示词加载器
+from ..prompts.loader import get_prompt
+
 # LangGraph 相关导入（兼容 0.2x 与 1.x）：先 StateGraph/END，再可选 add_messages
 LANGGRAPH_AVAILABLE = False
 add_messages = None  # noqa: F811
@@ -136,6 +139,139 @@ class PlanningAgent:
         
         logger.info(f"PlanningAgent: 任务分解完成，共{len(plan.get('steps', []))}个步骤")
         return plan
+    
+    def parse_multi_hop_plan(self, user_question):
+        """
+        解析用户问题，生成结构化多跳计划
+        :param user_question: 用户输入的复杂问题
+        :return: 结构化多跳计划（字典），包含hop_count、hops、total_stop_condition
+        """
+        # 从提示词加载器获取多跳分解提示词
+        try:
+            multi_hop_prompt = get_prompt("planning_multi_hop_decomposition", user_question=user_question)
+            if not multi_hop_prompt:
+                logger.warning("未找到多跳分解提示词，使用默认提示词")
+                # 使用默认提示词作为兜底
+                multi_hop_prompt = """
+                请严格按照以下规则分析用户问题的多跳逻辑，仅输出JSON格式结果，无需额外解释：
+                1. 跳数判定：仅分为【单跳/两跳/三跳及以上】，根据问题复杂度合理判定，不过度拆解、不拆解不足；
+                2. 每跳目标：明确每一跳需要获取的核心信息（仅1句话），后一跳目标必须依赖前一跳结果；
+                3. 工具匹配：为每一跳指定最优工具（可选：search_web/advanced_web_search/calculate/get_time/get_conversation_history/list_workspace_files），优先选择高效工具（数值计算用calculate，不使用search_web）；
+                4. 终止条件：明确“满足什么条件时停止该跳”“满足什么条件时停止整体多跳推理”；
+                5. 特殊场景适配：
+                   - 反推类多跳（结果→原因→前置条件）：按“前置条件→原因→结果”的顺序拆解；
+                   - 跨语言多跳（中文问题查英文数据源）：需在对应跳指定翻译工具，先翻译查询词再搜索。
+
+                用户问题：{user_question}
+                输出格式（必须严格遵循，JSON无语法错误）：
+                {{
+                  "hop_count": "单跳/两跳/三跳及以上",
+                  "hops": [
+                    {{"hop_num": 1, "target": "xxx", "tool": "xxx", "stop_condition": "获取到xxx信息即停止"}},
+                    {{"hop_num": 2, "target": "xxx", "tool": "xxx", "stop_condition": "获取到xxx信息即停止"}},
+                    {{"hop_num": 3, "target": "xxx", "tool": "xxx", "stop_condition": "获取到xxx信息即停止"}}
+                  ],
+                  "total_stop_condition": "所有跳完成且获取到足够信息，能完整回答原问题即停止多跳推理"
+                }}
+                """.format(user_question=user_question)
+        except Exception as e:
+            logger.error(f"加载提示词失败: {e}")
+            # 使用默认提示词作为兜底
+            multi_hop_prompt = """
+            请严格按照以下规则分析用户问题的多跳逻辑，仅输出JSON格式结果，无需额外解释：
+            1. 跳数判定：仅分为【单跳/两跳/三跳及以上】，根据问题复杂度合理判定，不过度拆解、不拆解不足；
+            2. 每跳目标：明确每一跳需要获取的核心信息（仅1句话），后一跳目标必须依赖前一跳结果；
+            3. 工具匹配：为每一跳指定最优工具（可选：search_web/advanced_web_search/calculate/get_time/get_conversation_history/list_workspace_files），优先选择高效工具（数值计算用calculate，不使用search_web）；
+            4. 终止条件：明确“满足什么条件时停止该跳”“满足什么条件时停止整体多跳推理”；
+            5. 特殊场景适配：
+               - 反推类多跳（结果→原因→前置条件）：按“前置条件→原因→结果”的顺序拆解；
+               - 跨语言多跳（中文问题查英文数据源）：需在对应跳指定翻译工具，先翻译查询词再搜索。
+
+            用户问题：{user_question}
+            输出格式（必须严格遵循，JSON无语法错误）：
+            {{
+              "hop_count": "单跳/两跳/三跳及以上",
+              "hops": [
+                {{"hop_num": 1, "target": "xxx", "tool": "xxx", "stop_condition": "获取到xxx信息即停止"}},
+                {{"hop_num": 2, "target": "xxx", "tool": "xxx", "stop_condition": "获取到xxx信息即停止"}},
+                {{"hop_num": 3, "target": "xxx", "tool": "xxx", "stop_condition": "获取到xxx信息即停止"}}
+              ],
+              "total_stop_condition": "所有跳完成且获取到足够信息，能完整回答原问题即停止多跳推理"
+            }}
+            """.format(user_question=user_question)
+        
+        # 构建LLM提示词
+        llm_prompt = [
+            {"role": "system", "content": "仅输出JSON格式多跳计划，无任何额外文本，确保JSON语法正确"},
+            {"role": "user", "content": multi_hop_prompt}
+        ]
+        # 调用轻量模型生成多跳计划
+        try:
+            if hasattr(self.llm, 'chat') and callable(self.llm.chat):
+                response = self.llm.chat(llm_prompt, max_tokens=1024, temperature=0.2)
+                # 处理不同格式的响应
+                if isinstance(response, dict):
+                    # 如果是API响应对象，直接使用
+                    llm_output = response
+                elif hasattr(response, 'get'):
+                    # 如果是字典-like对象，尝试提取content
+                    llm_output = response.get('content') or response.get('text') or str(response)
+                else:
+                    # 其他情况，转换为字符串
+                    llm_output = str(response)
+            else:
+                llm_output = self._call_llm(prompt)
+        except Exception as e:
+            logger.error(f"LLM调用失败: {e}")
+            llm_output = ""
+        
+        try:
+            # 解析JSON格式，容错处理（LLM输出异常时）
+            import json
+            # 处理LLM返回的完整API响应对象
+            if isinstance(llm_output, dict) and 'choices' in llm_output:
+                content = llm_output['choices'][0]['message']['content']
+                logger.debug(f"从API响应中提取content: {content}")
+            else:
+                content = llm_output
+                logger.debug(f"直接使用llm_output作为content: {content}")
+            
+            # 尝试解析JSON，如果失败则尝试清理空格后重试
+            import re
+            try:
+                hop_plan = json.loads(content)
+                logger.debug(f"JSON解析成功: {hop_plan}")
+            except json.JSONDecodeError as e:
+                logger.warning(f"JSON解析失败: {e}, content: {content}")
+                # 清理字符串值中的多余空格（如" 单跳" -> "单跳"，"计算结 果" -> "计算结果"）
+                # 将字符串值中的多个连续空格替换为单个空格
+                content = re.sub(r'"\s+([^"]*?)\s+"', r'"\1"', content)
+                # 将字符串值内部的多个连续空格替换为单个空格
+                content = re.sub(r'"\s+([^"]*?)\s+"', r'"\1"', content)
+                # 再次尝试解析
+                hop_plan = json.loads(content)
+                logger.debug(f"清理后JSON解析成功: {hop_plan}")
+            
+            # 清理hop_count中的空格（双重保险）
+            if 'hop_count' in hop_plan:
+                hop_plan['hop_count'] = hop_plan['hop_count'].strip()
+            # 校验多跳计划完整性
+            required_keys = ["hop_count", "hops", "total_stop_condition"]
+            if not all(key in hop_plan for key in required_keys):
+                logger.warning("多跳计划格式不完整，触发兜底策略（默认拆解为单跳搜索）")
+                return {
+                    "hop_count": "单跳",
+                    "hops": [{"hop_num": 1, "target": user_question, "tool": "search_web", "stop_condition": "获取到相关信息即停止"}],
+                    "total_stop_condition": "获取到足够信息即停止"
+                }
+            return hop_plan
+        except Exception as e:
+            logger.error(f"多跳计划解析失败，LLM输出：{llm_output}，触发兜底策略")
+            return {
+                "hop_count": "单跳",
+                "hops": [{"hop_num": 1, "target": user_question, "tool": "search_web", "stop_condition": "获取到相关信息即停止"}],
+                "total_stop_condition": "获取到足够信息即停止"
+            }
     
     def _build_decomposition_prompt(self, question: str, context: Dict[str, Any] = None) -> str:
         """构建任务分解提示词（优化：限制工具列表长度以控制token消耗）"""
@@ -344,6 +480,27 @@ class ExecutionAgent:
                 "error": str(e)
             }
     
+    async def execute_steps_parallel(self, steps: List[Dict[str, Any]], context: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+        """
+        并行执行多个步骤
+        
+        Args:
+            steps: 步骤列表
+            context: 上下文信息
+        
+        Returns:
+            执行结果列表
+        """
+        import asyncio
+        logger.info(f"ExecutionAgent: 并行执行 {len(steps)} 个步骤")
+        
+        # 并行执行所有步骤
+        tasks = [self.execute_step(step, context) for step in steps]
+        results = await asyncio.gather(*tasks)
+        
+        logger.info(f"ExecutionAgent: 并行执行完成，共 {len(results)} 个结果")
+        return results
+    
     async def _direct_reasoning(self, step: Dict[str, Any], context: Dict[str, Any] = None) -> Dict[str, Any]:
         """直接推理（不使用工具）"""
         step_id = step.get("id")
@@ -535,6 +692,10 @@ class ExecutionAgent:
                 "method": "tool_execution"
             }
         
+        # 特殊处理跨数据源搜索
+        if tool_type == "search_across_sources":
+            return await self._execute_cross_source_search(step, context)
+        
         # Prefer ToolHub (supports tools>skills>mcps with fallback)
         if self.tool_hub and self.tool_hub.has_tool(tool_type):
             try:
@@ -690,6 +851,86 @@ class ExecutionAgent:
         logger.warning(f"[步骤{step_id}] 工具注册表不可用，降级到直接推理")
         return await self._direct_reasoning(step, context)
     
+    async def _execute_cross_source_search(self, step: Dict[str, Any], context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """执行跨数据源搜索"""
+        step_id = step.get("id")
+        tool_input = self._prepare_tool_input(step, context)
+        sources = step.get("sources", ["web", "news"])
+        trace = None
+        try:
+            from ..observability import get_trace_context_from_context
+            trace = get_trace_context_from_context(context)
+        except Exception:
+            pass
+        
+        logger.info(f"[步骤{step_id}] 执行跨数据源搜索: {tool_input}, 数据源: {sources}")
+        
+        if trace and hasattr(trace, "on_tool_call_start"):
+            trace.on_tool_call_start(step_id or 0, "search_across_sources", tool_input)
+        
+        # 获取搜索工具
+        search_tool = None
+        if self.tool_registry:
+            search_tool = self.tool_registry.get_tool("search_web")
+        
+        if not search_tool:
+            logger.error(f"[步骤{step_id}] 搜索工具未找到")
+            if trace and hasattr(trace, "on_tool_call_end"):
+                trace.on_tool_call_end(step_id or 0, "search_across_sources", False, error="搜索工具未找到")
+            logger.warning(f"[步骤{step_id}] 搜索工具未找到，降级到直接推理")
+            return await self._direct_reasoning(step, context)
+        
+        try:
+            # 执行跨数据源搜索
+            if hasattr(search_tool, "search_across_sources"):
+                result = await search_tool.search_across_sources(tool_input, sources)
+                formatted_result = self._format_tool_result(result, "search_across_sources")
+                if trace and hasattr(trace, "on_tool_call_end"):
+                    trace.on_tool_call_end(
+                        step_id or 0, 
+                        "search_across_sources", 
+                        result.get("success", False),
+                        result_preview=formatted_result,
+                        error=result.get("error")
+                    )
+                logger.info(f"[步骤{step_id}] 跨数据源搜索完成，成功={result.get('success', False)}")
+                return {
+                    "step_id": step_id,
+                    "success": result.get("success", False),
+                    "result": formatted_result,
+                    "raw_result": result,
+                    "method": "search_across_sources",
+                    "tool_input": tool_input
+                }
+            else:
+                # 回退到普通搜索
+                logger.warning(f"[步骤{step_id}] 搜索工具不支持跨数据源搜索，回退到普通搜索")
+                result = await search_tool.execute(tool_input)
+                formatted_result = self._format_tool_result(result, "search_web")
+                if trace and hasattr(trace, "on_tool_call_end"):
+                    trace.on_tool_call_end(
+                        step_id or 0, 
+                        "search_across_sources", 
+                        result.get("success", False),
+                        result_preview=formatted_result,
+                        error=result.get("error")
+                    )
+                logger.info(f"[步骤{step_id}] 普通搜索完成，成功={result.get('success', False)}")
+                return {
+                    "step_id": step_id,
+                    "success": result.get("success", False),
+                    "result": formatted_result,
+                    "raw_result": result,
+                    "method": "search_web_fallback",
+                    "tool_input": tool_input
+                }
+        except Exception as e:
+            logger.error(f"[步骤{step_id}] 跨数据源搜索失败: {e}")
+            if trace and hasattr(trace, "on_tool_call_end"):
+                trace.on_tool_call_end(step_id or 0, "search_across_sources", False, error=str(e))
+            logger.warning(f"[步骤{step_id}] 跨数据源搜索失败，降级到直接推理")
+            return await self._direct_reasoning(step, context)
+    
     def _format_tool_result(self, tool_result: Dict[str, Any], tool_type: str) -> str:
         """
         格式化工具结果，并应用长度限制以控制token消耗。
@@ -707,6 +948,7 @@ class ExecutionAgent:
             "get_time": 200,
             "search_web": 500,
             "advanced_web_search": 800,
+            "search_across_sources": 1000,  # 跨数据源搜索结果可能更长
             "get_conversation_history": 1000,
             "default": 500,
         }
@@ -766,6 +1008,158 @@ class ExecutionAgent:
         
         # 应用长度限制
         return _truncate(result_text, max_len)
+    
+    def check_single_hop_complete(self, hop_info, current_observation):
+        """
+        单跳终止校验：判断当前跳是否满足终止条件
+        :param hop_info: 当前跳的信息（来自多跳计划）
+        :param current_observation: 当前跳的工具调用结果
+        :return: True（终止该跳）/False（继续该跳）
+        """
+        check_prompt = f"""
+        当前跳目标：{hop_info['target']}
+        当前跳终止条件：{hop_info['stop_condition']}
+        当前跳工具调用结果：{current_observation}
+        请仅回答YES或NO：当前结果是否满足该跳的终止条件？
+        """
+        # 调用轻量模型校验，提速
+        llm_prompt = [
+            {"role": "system", "content": "仅回答YES或NO，无任何额外解释"},
+            {"role": "user", "content": check_prompt}
+        ]
+        try:
+            if hasattr(self.llm, 'chat') and callable(self.llm.chat):
+                response = self.llm.chat(llm_prompt, max_tokens=10, temperature=0.1)
+                response_text = response.get('content') or response.get('text') or str(response)
+            else:
+                response_text = self.llm.generate(check_prompt)
+            return "YES" in response_text.strip().upper()
+        except Exception as e:
+            logger.error(f"单跳终止校验失败: {e}")
+            return True
+    
+    def check_total_hop_complete(self, user_question, total_stop_condition, current_evidence):
+        """
+        整体多跳终止校验：判断是否满足整体多跳终止条件
+        :param user_question: 原用户问题
+        :param total_stop_condition: 整体终止条件（来自多跳计划）
+        :param current_evidence: 所有跳的工具调用结果汇总
+        :return: True（终止多跳）/False（继续多跳）
+        """
+        check_prompt = f"""
+        原用户问题：{user_question}
+        整体多跳终止条件：{total_stop_condition}
+        当前所有跳的证据汇总：{current_evidence}
+        请仅回答YES或NO：当前证据是否满足整体终止条件，能完整回答原问题？
+        """
+        llm_prompt = [
+            {"role": "system", "content": "仅回答YES或NO，无任何额外解释"},
+            {"role": "user", "content": check_prompt}
+        ]
+        try:
+            if hasattr(self.llm, 'chat') and callable(self.llm.chat):
+                response = self.llm.chat(llm_prompt, max_tokens=10, temperature=0.1)
+                response_text = response.get('content') or response.get('text') or str(response)
+            else:
+                response_text = self.llm.generate(check_prompt)
+            return "YES" in response_text.strip().upper()
+        except Exception as e:
+            logger.error(f"整体多跳终止校验失败: {e}")
+            return False
+    
+    def validate_hop_result(self, hop_target, hop_result):
+        """
+        中间结果校验：验证单跳结果的准确性
+        :param hop_target: 当前跳目标
+        :param hop_result: 当前跳工具调用结果
+        :return: (is_valid: 布尔值, correct_result: 校验后的结果)
+        """
+        validate_prompt = f"""
+        验证目标：{hop_target}
+        当前单跳结果：{hop_result}
+        请严格按照以下要求输出：
+        1. 先判断结果是否准确（TRUE/FALSE）；
+        2. 若FALSE，给出正确结果（无则填"无"）；
+        3. 仅输出上述内容，无任何额外解释，格式：TRUE/FALSE，正确结果。
+        """
+        llm_prompt = [
+            {"role": "system", "content": "仅输出校验结果，格式：TRUE/FALSE，正确结果，无额外解释"},
+            {"role": "user", "content": validate_prompt}
+        ]
+        try:
+            if hasattr(self.llm, 'chat') and callable(self.llm.chat):
+                response = self.llm.chat(llm_prompt, max_tokens=1024, temperature=0.1)
+                response_text = response.get('content') or response.get('text') or str(response)
+            else:
+                response_text = self.llm.generate(validate_prompt)
+            is_valid_str, correct_result = response_text.split("，", 1)
+            is_valid = is_valid_str.strip().upper() == "TRUE"
+            return is_valid, correct_result.strip()
+        except Exception as e:
+            logger.error(f"中间结果校验失败，响应：{response_text}，默认判定为有效")
+            return True, hop_result
+    
+    async def correct_hop_result(self, hop_target, hop_result, tool):
+        """
+        中间结果纠错：结果错误时，重新检索或返回兜底
+        :param hop_target: 当前跳目标
+        :param hop_result: 当前跳错误结果
+        :param tool: 当前跳使用的工具
+        :return: 纠错后的结果
+        """
+        logger.warning(f"跳结果错误，触发纠错机制，目标：{hop_target}")
+        # 重新调用工具检索（最多1次）
+        try:
+            if self.tool_registry:
+                tool_instance = self.tool_registry.get_tool(tool)
+                if tool_instance:
+                    # 检查工具是否有异步execute方法
+                    import asyncio
+                    if asyncio.iscoroutinefunction(tool_instance.execute):
+                        corrected_result = await tool_instance.execute(hop_target)
+                    else:
+                        corrected_result = tool_instance.execute(hop_target)
+                    # 二次校验
+                    is_valid, final_result = self.validate_hop_result(hop_target, corrected_result)
+                    if is_valid:
+                        logger.info(f"纠错成功，纠错后结果：{final_result}")
+                        return final_result
+            logger.warning("二次检索仍错误，返回兜底结果")
+            return f"该跳未获取到准确信息（目标：{hop_target}）"
+        except Exception as e:
+            logger.error(f"纠错失败：{str(e)}，返回兜底结果")
+            return f"该跳未获取到准确信息（目标：{hop_target}）"
+    
+    def fuse_hop_evidence(self, evidence_list):
+        """
+        多跳证据融合：过滤噪声，加权融合，生成精准中间结果
+        :param evidence_list: 所有跳的证据列表
+        :return: 融合后的证据汇总
+        """
+        fuse_prompt = f"""
+        以下是多跳推理的所有跳证据列表，要求：
+        1. 过滤噪声证据（与原问题无关、错误的证据）；
+        2. 按跳数顺序，加权融合各跳证据，保留核心信息，去除冗余；
+        3. 生成简洁、连贯的证据汇总，便于后续生成最终答案；
+        4. 仅输出融合后的证据汇总，无任何额外解释。
+
+        证据列表：
+        {chr(10).join([f"第{i+1}跳：{evidence}" for i, evidence in enumerate(evidence_list)])}
+        """
+        llm_prompt = [
+            {"role": "system", "content": "仅输出融合后的证据汇总，简洁、连贯，无额外解释"},
+            {"role": "user", "content": fuse_prompt}
+        ]
+        try:
+            if hasattr(self.llm, 'chat') and callable(self.llm.chat):
+                response = self.llm.chat(llm_prompt, max_tokens=1024, temperature=0.1)
+                fused_evidence = response.get('content') or response.get('text') or str(response)
+            else:
+                fused_evidence = self.llm.generate(fuse_prompt)
+            return fused_evidence.strip()
+        except Exception as e:
+            logger.error(f"证据融合失败: {e}")
+            return "\n".join(evidence_list)
     
     def _prepare_tool_input(self, step: Dict[str, Any], context: Dict[str, Any] = None) -> str:
         """准备工具输入"""

@@ -93,7 +93,7 @@ class LLMClient:
             provider_config["load_in_8bit"] = config.get("load_in_8bit", False)
             provider_config["load_in_4bit"] = config.get("load_in_4bit", False)
         
-        # 强校验：彻底与代码解耦（缺配置就直接报错，不允许“写死回退”）
+        # 强校验：彻底与代码解耦（缺配置就直接报错，不允许"写死回退"）
         if not provider_config.get("model_name"):
             raise ValueError("LLMClient requires model.model_name (or env LLM_MODEL)")
         if provider_type in ["api", "openai", "custom", "cloud"]:
@@ -108,11 +108,45 @@ class LLMClient:
             self.model = provider_config["model_name"]
             self.temperature = provider_config["temperature"]
             self.max_tokens = provider_config["max_tokens"]
+            self.provider_type = provider_type
+            self.config = config
             logger.info(f"LLMClient initialized: provider={provider_type}, model={self.model}")
         except Exception as e:
             logger.exception(f"初始化模型提供者失败: {e}")
-            # 严格模式：不做“换基座模型”的隐式降级，直接向上抛错
+            # 严格模式：不做"换基座模型"的隐式降级，直接向上抛错
             raise
+    
+    @classmethod
+    def get_client_for_task(cls, task_type: str, **kwargs) -> 'LLMClient':
+        """
+        根据任务类型获取合适的LLM客户端
+        
+        Args:
+            task_type: 任务类型，如 "planning", "execution", "verification", "synthesis"
+            **kwargs: 其他参数
+        
+        Returns:
+            LLM客户端实例
+        """
+        try:
+            from ..config.config_loader import get_config
+            config = get_config().get_section("model")
+        except Exception:
+            config = {}
+        
+        # 根据任务类型选择模型
+        task_model_map = {
+            "planning": config.get("lightweight_model", config.get("model_name")),
+            "execution": config.get("lightweight_model", config.get("model_name")),
+            "verification": config.get("lightweight_model", config.get("model_name")),
+            "synthesis": config.get("model_name")  # 合成任务使用主模型
+        }
+        
+        model = task_model_map.get(task_type, config.get("model_name"))
+        logger.info(f"为任务类型 '{task_type}' 选择模型: {model}")
+        
+        # 构建客户端
+        return cls(model=model, **kwargs)
     
     def chat(self, 
              messages: List[Dict[str, str]],

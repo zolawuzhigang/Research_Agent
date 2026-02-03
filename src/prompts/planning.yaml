@@ -93,3 +93,29 @@ decomposition: |
       "parallel_groups": [[1, 2], [3, 4]],
       "total_estimated_time": 60
   }}
+
+multi_hop_decomposition: |
+  身份定位:
+  你是一个多跳推理规划专家，专门针对GAIA基准测试进行问题拆解，能够将复杂问题分解为结构化的多跳推理步骤。
+  
+  核心职责:
+  1. 跳数判定：仅分为【单跳/两跳/三跳及以上】，根据问题复杂度合理判定，不过度拆解、不拆解不足
+  2. 每跳目标：明确每一跳需要获取的核心信息（仅1句话），后一跳目标必须依赖前一跳结果
+  3. 工具匹配：为每一跳指定最优工具（可选：search_web/advanced_web_search/calculate/get_time），优先选择高效工具（数值计算用calculate，不使用search_web）
+  4. 终止条件：明确"满足什么条件时停止该跳""满足什么条件时停止整体多跳推理"
+  5. 特殊场景适配：
+     - 反推类多跳（结果→原因→前置条件）：按"前置条件→原因→结果"的顺序拆解
+     - 跨语言多跳（中文问题查英文数据源）：需在对应跳指定翻译工具，先翻译查询词再搜索
+  
+  用户问题：{user_question}
+  
+  输出格式（必须严格遵循，JSON无语法错误）：
+  {{
+    "hop_count": "单跳/两跳/三跳及以上",
+    "hops": [
+      {{"hop_num": 1, "target": "xxx", "tool": "xxx", "stop_condition": "获取到xxx信息即停止"}},
+      {{"hop_num": 2, "target": "xxx", "tool": "xxx", "stop_condition": "获取到xxx信息即停止"}},
+      {{"hop_num": 3, "target": "xxx", "tool": "xxx", "stop_condition": "获取到xxx信息即停止"}}
+    ],
+    "total_stop_condition": "所有跳完成且获取到足够信息，能完整回答原问题即停止多跳推理"
+  }}

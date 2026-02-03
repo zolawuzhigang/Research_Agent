@@ -60,14 +60,40 @@ class CalculatorTool(BaseTool):
         return cleaned
     
     def _safe_eval(self, expression: str) -> float:
-        """安全计算（限制可用的操作符）"""
-        # 只允许基本的数学运算
-        allowed_chars = set('0123456789+-*/(). ')
-        if not all(c in allowed_chars for c in expression):
-            raise ValueError("表达式包含不允许的字符")
+        """安全计算（限制可用的操作符和函数）"""
+        # 只允许基本的数学运算和安全的数学函数
+        allowed_pattern = r'^[0-9+\-*/().\s]+$'
+        if not re.match(allowed_pattern, expression):
+            # 检查是否包含安全的数学函数
+            safe_functions = ['sin', 'cos', 'tan', 'sqrt', 'exp', 'log', 'abs', 'pow']
+            for func in safe_functions:
+                if func in expression:
+                    # 检查函数调用格式是否安全
+                    if not re.match(r'^[0-9+\-*/().\s%s]+$' % ''.join(safe_functions), expression):
+                        raise ValueError("表达式包含不允许的字符或函数")
+                    break
+            else:
+                raise ValueError("表达式包含不允许的字符")
         
         try:
-            result = eval(expression)
+            # 导入安全的数学函数
+            import math
+            
+            # 安全的全局变量
+            safe_globals = {
+                '__builtins__': {},
+                'sin': math.sin,
+                'cos': math.cos,
+                'tan': math.tan,
+                'sqrt': math.sqrt,
+                'exp': math.exp,
+                'log': math.log,
+                'abs': abs,
+                'pow': pow,
+                'math': math
+            }
+            
+            result = eval(expression, safe_globals)
             return float(result)
         except Exception as e:
             raise ValueError(f"计算错误: {e}")
