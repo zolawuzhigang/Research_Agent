@@ -533,6 +533,9 @@ class AgentOrchestrator:
             "一共问了你几个问题",
             "都问了你什么问题",
             "都问了你什么",
+            "都问了你哪些",
+            "都是哪些问题",
+            "都是哪些",
         ]
         history_keywords_en = [
             "what did i ask",
