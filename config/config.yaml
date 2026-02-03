@@ -8,57 +8,21 @@ agent:
 
 # 模型配置
 model:
-  # # 提供者类型: "api" (API云上模型) 或 "local" (本地部署模型)
-  # provider: "api"  # api, local, openai, custom, huggingface
-
-  # # API云上模型配置（当 provider="api" 时使用）
-
-    # 提供者类型: "api" (API云上模型) 或 "local" (本地部署模型)
+  # 提供者类型: "api" (API云上模型) 或 "local" (本地部署模型)
   provider: "api"  # api, local, openai, custom, huggingface
   api_base: "https://newapi.3173721.xyz/v1/chat/completions"
   api_key: "sk-DwBE5H6xxCV6I7i0q8v6rq3ZHauPuSq6fWVerxu7gJ9DmQoz"
-  # API云上模型配置（当 provider="api" 时使用）
-  # SiliconFlow OpenAI-compatible endpoint
-<<<<<<< HEAD
-#  deepseek-ai/DeepSeek-V3.2
-#  api_base: "https://api.siliconflow.cn/v1/chat/completions"
-#  api_key: "sk-hwcnbmzkafcexxqedhhdrocicavcekdkojfuqumvdcfxquqg"
-
-  #kimi-k2-turbo-preview
-#  api_base: "https://api.moonshot.cn/v1"
-#  api_key: "sk-kimi-KkwpWNItVpK2jmgxwOjfUn3B7cD1UJJHLbdwgEgRLOhM9gQl2EaXD58cidlc5bJq"
-
   # 通用配置
-  model_name: "qwen3-max"  # 模型名称/ID（可选: deepseek-ai/DeepSeek-V3, deepseek-ai/DeepSeek-V3.2）
+  model_name: "qwen3-max"  # 模型名称/ID
+  lightweight_model: "qwen3-mini"  # 轻量级模型，用于规划、执行、验证等任务
   temperature: 0.1
   max_tokens: 2000
   timeout: 60
-=======
-  api_base: ""
-  api_key: ""
-  
->>>>>>> 5de83f99c23a76ba3b2b31d9086790ca8e411a2f
   # 本地部署模型配置（当 provider="local" 时使用）
   # model_path: "/path/to/local/model"  # 本地模型路径
   # device: "cuda"  # cuda 或 cpu
   # load_in_8bit: false  # 是否使用8bit量化
   # load_in_4bit: false  # 是否使用4bit量化
-
-  # # 通用配置
-  # model_name: "qwen3-max"  # 模型名称/ID
-  # temperature: 0.1
-  # max_tokens: 2000
-  # timeout: 60
-  
-<<<<<<< HEAD
-
-=======
-  # 通用配置
-  model_name: ""  # 模型名称/ID
-  temperature: 0.1
-  max_tokens: 2000
-  timeout: 60
->>>>>>> 5de83f99c23a76ba3b2b31d9086790ca8e411a2f
 # 任务配置
 task:
   max_retries: 3
@@ -68,7 +32,7 @@ task:
 
 # 日志配置
 logging:
-  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  level: "DEBUG"  # DEBUG, INFO, WARNING, ERROR
   file: "logs/agent.log"
   rotation: "10 MB"
   retention: "7 days"
@@ -104,6 +68,16 @@ performance:
   cache_enabled: true
   cache_ttl: 3600
   async_execution: true
+
+# PAI生态适配配置
+pai:
+  enabled: true  # 是否启用PAI生态适配
+  langstudio:
+    enabled: false  # 是否启用PAI-LangStudio适配
+  eas:
+    enabled: true  # 是否启用PAI-EAS部署适配
+    endpoint_type: "http"  # 部署端点类型
+    timeout: 300  # 部署超时时间（秒）
 
 # 可观测性/调试：工具调用、中间推理、证据整合等环节的追踪
 observability:
