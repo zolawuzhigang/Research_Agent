@@ -220,8 +220,8 @@ class LangGraphWorkflow:
                     evidence_list.append(hop_result)
                     state["evidence_list"] = evidence_list
                     
-                    # 证据融合
-                    if hasattr(execution_agent, "fuse_hop_evidence"):
+                    # 证据融合 - 只在需要时进行
+                    if hasattr(execution_agent, "fuse_hop_evidence") and len(evidence_list) > 0:
                         fused_evidence = execution_agent.fuse_hop_evidence(evidence_list)
                         state["fused_evidence"] = fused_evidence
                     
@@ -242,7 +242,14 @@ class LangGraphWorkflow:
             # 整体多跳终止校验
             if hasattr(execution_agent, "check_total_hop_complete"):
                 total_stop_condition = multi_hop_plan.get("total_stop_condition", "")
-                fused_evidence = state.get("fused_evidence", "\n".join(evidence_list))
+                # 确保evidence_list中的所有元素都是字符串
+                string_evidence = []
+                for evidence in evidence_list:
+                    if isinstance(evidence, dict):
+                        string_evidence.append(str(evidence))
+                    else:
+                        string_evidence.append(str(evidence))
+                fused_evidence = state.get("fused_evidence", "\n".join(string_evidence))
                 if execution_agent.check_total_hop_complete(
                     state.get("question"),
                     total_stop_condition,
@@ -271,7 +278,24 @@ class LangGraphWorkflow:
         """判断是否应该验证"""
         plan = state.get("task_plan")
         current_step = state.get("current_step", 0)
+        multi_hop_plan = state.get("multi_hop_plan")
+        current_hop = state.get("current_hop", 0)
+        final_answer = state.get("final_answer")
         
+        # 如果已经生成最终答案，进入合成阶段
+        if final_answer:
+            return "synthesize"
+        
+        # 处理多跳逻辑
+        if multi_hop_plan:
+            hops = multi_hop_plan.get("hops", [])
+            # 如果所有跳都执行完成，进入合成阶段
+            if current_hop >= len(hops):
+                return "synthesize"
+            # 否则验证当前跳结果
+            return "verify"
+        
+        # 处理传统任务计划逻辑
         if not plan:
             return "synthesize"
         

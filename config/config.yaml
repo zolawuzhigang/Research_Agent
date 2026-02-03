@@ -15,7 +15,7 @@ model:
   # 通用配置
   model_name: "qwen3-max"  # 模型名称/ID
   lightweight_model: "qwen3-mini"  # 轻量级模型，用于规划、执行、验证等任务
-  temperature: 0.1
+  temperature: 1
   max_tokens: 2000
   timeout: 60
   # 本地部署模型配置（当 provider="local" 时使用）

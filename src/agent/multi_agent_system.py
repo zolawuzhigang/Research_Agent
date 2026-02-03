@@ -1016,6 +1016,20 @@ class ExecutionAgent:
         :param current_observation: 当前跳的工具调用结果
         :return: True（终止该跳）/False（继续该跳）
         """
+        # 直接判断某些工具的结果
+        tool_type = hop_info.get('tool', hop_info.get('target', '')).lower()
+        
+        # 对于时间工具，获取到时间信息后直接终止
+        if 'time' in tool_type:
+            if isinstance(current_observation, dict):
+                if current_observation.get('success') or 'current_time' in current_observation:
+                    logger.info(f"时间工具调用成功，满足终止条件")
+                    return True
+            elif isinstance(current_observation, str) and ('时间' in current_observation or 'time' in current_observation.lower()):
+                logger.info(f"时间工具调用成功，满足终止条件")
+                return True
+        
+        # 对于其他工具，使用LLM判断
         check_prompt = f"""
         当前跳目标：{hop_info['target']}
         当前跳终止条件：{hop_info['stop_condition']}
@@ -1033,7 +1047,9 @@ class ExecutionAgent:
                 response_text = response.get('content') or response.get('text') or str(response)
             else:
                 response_text = self.llm.generate(check_prompt)
-            return "YES" in response_text.strip().upper()
+            result = "YES" in response_text.strip().upper()
+            logger.info(f"单跳终止校验结果: {'YES' if result else 'NO'}")
+            return result
         except Exception as e:
             logger.error(f"单跳终止校验失败: {e}")
             return True
@@ -1074,6 +1090,17 @@ class ExecutionAgent:
         :param hop_result: 当前跳工具调用结果
         :return: (is_valid: 布尔值, correct_result: 校验后的结果)
         """
+        # 对于时间工具的结果，直接验证
+        if isinstance(hop_result, dict):
+            if hop_result.get('success') or 'current_time' in hop_result:
+                logger.info(f"时间工具结果验证通过")
+                return True, hop_result
+        elif isinstance(hop_result, str):
+            if '时间' in hop_result or 'time' in hop_result.lower():
+                logger.info(f"时间工具结果验证通过")
+                return True, hop_result
+        
+        # 对于其他工具的结果，使用LLM验证
         validate_prompt = f"""
         验证目标：{hop_target}
         当前单跳结果：{hop_result}
@@ -1092,11 +1119,29 @@ class ExecutionAgent:
                 response_text = response.get('content') or response.get('text') or str(response)
             else:
                 response_text = self.llm.generate(validate_prompt)
-            is_valid_str, correct_result = response_text.split("，", 1)
-            is_valid = is_valid_str.strip().upper() == "TRUE"
-            return is_valid, correct_result.strip()
+            
+            # 更健壮的解析
+            if 'TRUE' in response_text.upper():
+                is_valid = True
+                correct_result = hop_result
+            elif 'FALSE' in response_text.upper():
+                is_valid = False
+                # 尝试提取正确结果
+                if '，' in response_text:
+                    parts = response_text.split('，', 1)
+                    if len(parts) > 1:
+                        correct_result = parts[1].strip()
+                    else:
+                        correct_result = hop_result
+                else:
+                    correct_result = hop_result
+            else:
+                is_valid = True
+                correct_result = hop_result
+            
+            return is_valid, correct_result
         except Exception as e:
-            logger.error(f"中间结果校验失败，响应：{response_text}，默认判定为有效")
+            logger.error(f"中间结果校验失败：{e}，默认判定为有效")
             return True, hop_result
     
     async def correct_hop_result(self, hop_target, hop_result, tool):
@@ -1153,13 +1198,35 @@ class ExecutionAgent:
         try:
             if hasattr(self.llm, 'chat') and callable(self.llm.chat):
                 response = self.llm.chat(llm_prompt, max_tokens=1024, temperature=0.1)
-                fused_evidence = response.get('content') or response.get('text') or str(response)
+                # 正确提取content字段，处理OpenAI格式的响应
+                if isinstance(response, dict):
+                    if 'content' in response:
+                        fused_evidence = response['content']
+                    elif 'choices' in response and isinstance(response['choices'], list) and len(response['choices']) > 0:
+                        choice = response['choices'][0]
+                        if 'message' in choice and isinstance(choice['message'], dict):
+                            fused_evidence = choice['message'].get('content', '')
+                        else:
+                            fused_evidence = choice.get('content', '')
+                    elif 'text' in response:
+                        fused_evidence = response['text']
+                    else:
+                        fused_evidence = str(response)
+                else:
+                    fused_evidence = str(response)
             else:
                 fused_evidence = self.llm.generate(fuse_prompt)
             return fused_evidence.strip()
         except Exception as e:
             logger.error(f"证据融合失败: {e}")
-            return "\n".join(evidence_list)
+            # 确保evidence_list中的所有元素都是字符串
+            string_evidence = []
+            for evidence in evidence_list:
+                if isinstance(evidence, dict):
+                    string_evidence.append(str(evidence))
+                else:
+                    string_evidence.append(str(evidence))
+            return "\n".join(string_evidence)
     
     def _prepare_tool_input(self, step: Dict[str, Any], context: Dict[str, Any] = None) -> str:
         """准备工具输入"""

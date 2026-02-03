@@ -82,7 +82,7 @@ class APIModelProvider(BaseModelProvider):
         
         import os
         # 严格按配置/环境变量读取，不允许回退到“写死的基座模型”
-        self.api_base = (config.get("api_base") or os.getenv("LLM_API_BASE") or "").strip()
+        self.api_base = (config.get("api_base") or os.getenv("LLM_API_BASE") or "").strip().rstrip(',')
         self.api_key = (config.get("api_key") or os.getenv("LLM_API_KEY") or "").strip()
 
         if not self.api_base:
