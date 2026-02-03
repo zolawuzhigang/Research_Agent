@@ -20,6 +20,8 @@ sys.path.insert(0, str(project_root))
 from src.agent import AgentOrchestrator
 from src.utils.normalize import normalize_answer
 from src.utils.validators import validate_question
+from src.utils.logger import init_logger
+from src.config.config_loader import get_config
 
 
 # 请求模型
@@ -70,6 +72,15 @@ agent: Optional[AgentOrchestrator] = None
 async def startup_event():
     """启动时初始化Agent（带超时保护）"""
     global agent
+    
+    # 初始化日志系统
+    try:
+        config = get_config()
+        log_config = config.get_log_config()
+        init_logger(log_config)
+    except Exception as e:
+        print(f"日志系统初始化失败: {e}")
+    
     logger.info("正在初始化Research Agent...")
     
     try:

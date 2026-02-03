@@ -34,8 +34,12 @@ if LANGGRAPH_AVAILABLE and add_messages is not None:
             question: str
             messages: Annotated[List[Dict], add_messages]
             task_plan: Optional[Dict[str, Any]]
+            multi_hop_plan: Optional[Dict[str, Any]]
             current_step: int
+            current_hop: int
             step_results: List[Dict[str, Any]]
+            evidence_list: List[str]
+            fused_evidence: Optional[str]
             final_answer: Optional[str]
             errors: List[str]
             metadata: Dict[str, Any]
@@ -49,8 +53,12 @@ if LANGGRAPH_AVAILABLE and add_messages is None:
         question: str
         messages: List[Dict]
         task_plan: Optional[Dict[str, Any]]
+        multi_hop_plan: Optional[Dict[str, Any]]
         current_step: int
+        current_hop: int
         step_results: List[Dict[str, Any]]
+        evidence_list: List[str]
+        fused_evidence: Optional[str]
         final_answer: Optional[str]
         errors: List[str]
         metadata: Dict[str, Any]
@@ -61,8 +69,12 @@ if not LANGGRAPH_AVAILABLE:
         question: str
         messages: List[Dict]
         task_plan: Optional[Dict[str, Any]]
+        multi_hop_plan: Optional[Dict[str, Any]]
         current_step: int
+        current_hop: int
         step_results: List[Dict[str, Any]]
+        evidence_list: List[str]
+        fused_evidence: Optional[str]
         final_answer: Optional[str]
         errors: List[str]
         metadata: Dict[str, Any]
@@ -130,7 +142,16 @@ class LangGraphWorkflow:
                     context=state.get("metadata"),
                 )
                 state["task_plan"] = plan
+                
+                # 新增：解析多跳计划
+                if hasattr(planning_agent, "parse_multi_hop_plan"):
+                    multi_hop_plan = planning_agent.parse_multi_hop_plan(state["question"])
+                    state["multi_hop_plan"] = multi_hop_plan
+                    logger.info(f"多跳计划解析完成，跳数：{multi_hop_plan.get('hop_count')}")
+                
                 state["current_step"] = 0
+                state["current_hop"] = 0
+                state["evidence_list"] = []
                 steps = (plan or {}).get("steps", [])
                 if trace and hasattr(trace, "on_planning_end"):
                     trace.on_planning_end(steps_count=len(steps), success=True)
@@ -150,8 +171,87 @@ class LangGraphWorkflow:
         
         execution_agent = self.agents.get("execution")
         plan = state.get("task_plan")
+        multi_hop_plan = state.get("multi_hop_plan")
         
-        if execution_agent and plan:
+        if execution_agent and multi_hop_plan:
+            # 使用多跳计划执行
+            hops = multi_hop_plan.get("hops", [])
+            current_hop = state.get("current_hop", 0)
+            evidence_list = state.get("evidence_list", [])
+            
+            if current_hop < len(hops):
+                hop_info = hops[current_hop]
+                logger.info(f"执行第 {current_hop + 1} 跳: {hop_info.get('target')}")
+                
+                # 创建步骤信息
+                step = {
+                    "id": current_hop + 1,
+                    "description": hop_info.get('target'),
+                    "tool_type": hop_info.get('tool'),
+                    "dependencies": []
+                }
+                
+                # 传入 metadata（含 _trace、task_ctx）以便执行层记录工具调用/推理事件
+                ctx = {**(state.get("metadata") or {}), "step_results": state.get("step_results", [])}
+                result = await execution_agent.execute_step(step, ctx)
+                
+                if "step_results" not in state:
+                    state["step_results"] = []
+                state["step_results"].append(result)
+                
+                # 处理多跳逻辑
+                if result.get("success"):
+                    hop_result = result.get("result", "")
+                    
+                    # 中间结果校验与纠错
+                    if hasattr(execution_agent, "validate_hop_result"):
+                        is_valid, correct_result = execution_agent.validate_hop_result(
+                            hop_info.get('target'), hop_result
+                        )
+                        if not is_valid:
+                            logger.warning(f"第 {current_hop + 1} 跳结果错误，触发纠错")
+                            if hasattr(execution_agent, "correct_hop_result"):
+                                correct_result = await execution_agent.correct_hop_result(
+                                    hop_info.get('target'), hop_result, hop_info.get('tool')
+                                )
+                        hop_result = correct_result
+                    
+                    # 添加到证据列表
+                    evidence_list.append(hop_result)
+                    state["evidence_list"] = evidence_list
+                    
+                    # 证据融合
+                    if hasattr(execution_agent, "fuse_hop_evidence"):
+                        fused_evidence = execution_agent.fuse_hop_evidence(evidence_list)
+                        state["fused_evidence"] = fused_evidence
+                    
+                    # 单跳终止校验
+                    if hasattr(execution_agent, "check_single_hop_complete"):
+                        if execution_agent.check_single_hop_complete(hop_info, hop_result):
+                            logger.info(f"第 {current_hop + 1} 跳满足终止条件，进入下一跳")
+                            state["current_hop"] = current_hop + 1
+                        else:
+                            logger.info(f"第 {current_hop + 1} 跳未满足终止条件，继续该跳")
+                    else:
+                        # 无终止校验时，直接进入下一跳
+                        state["current_hop"] = current_hop + 1
+                else:
+                    logger.error(f"第 {current_hop + 1} 跳执行失败: {result.get('error')}")
+                    state["current_hop"] = current_hop + 1
+            
+            # 整体多跳终止校验
+            if hasattr(execution_agent, "check_total_hop_complete"):
+                total_stop_condition = multi_hop_plan.get("total_stop_condition", "")
+                fused_evidence = state.get("fused_evidence", "\n".join(evidence_list))
+                if execution_agent.check_total_hop_complete(
+                    state.get("question"),
+                    total_stop_condition,
+                    fused_evidence
+                ):
+                    logger.info("满足整体多跳终止条件，终止推理")
+                    state["final_answer"] = fused_evidence
+        elif execution_agent and plan:
+            # 传统任务计划执行（兼容）
             steps = plan.get("steps", [])
             current_step = state.get("current_step", 0)
             
@@ -224,7 +324,10 @@ class LangGraphWorkflow:
         if trace and hasattr(trace, "on_synthesis_start"):
             trace.on_synthesis_start(step_results_count=len(step_results))
 
-        if step_results:
+        # 优先使用多跳证据融合结果
+        if state.get("fused_evidence"):
+            state["final_answer"] = state.get("fused_evidence")
+        elif step_results:
             final_text = None
             for res in reversed(step_results):
                 if not res.get("success"):
@@ -267,8 +370,12 @@ class LangGraphWorkflow:
             "question": question,
             "messages": [],
             "task_plan": None,
+            "multi_hop_plan": None,
             "current_step": 0,
+            "current_hop": 0,
             "step_results": [],
+            "evidence_list": [],
+            "fused_evidence": None,
             "final_answer": None,
             "errors": [],
             "metadata": context or {}
@@ -299,8 +406,12 @@ class LangGraphWorkflow:
         state = {
             "question": question,
             "task_plan": None,
+            "multi_hop_plan": None,
             "current_step": 0,
+            "current_hop": 0,
             "step_results": [],
+            "evidence_list": [],
+            "fused_evidence": None,
             "final_answer": None,
             "errors": [],
             "metadata": context or {}

@@ -3,6 +3,7 @@
 """
 
 import os
+import json
 import requests
 from typing import Dict, Any, Optional, List, Union
 from loguru import logger
@@ -89,7 +90,28 @@ class SearchTool(BaseTool):
                 lambda: requests.get(self.base_url, params=params, timeout=10)
             )
             response.raise_for_status()
-            data = response.json()
+            
+            # 检查响应内容是否为空
+            if not response.text or response.text.strip() == '':
+                logger.error(f"搜索API返回空响应: {query}")
+                return {
+                    "success": False,
+                    "error": "搜索API返回空响应",
+                    "query": query,
+                    "results": []
+                }
+            
+            # 尝试解析JSON响应
+            try:
+                data = response.json()
+            except json.JSONDecodeError as e:
+                logger.error(f"搜索API返回无效JSON: {e}, 响应内容: {response.text[:200]}")
+                return {
+                    "success": False,
+                    "error": f"搜索API返回无效JSON: {str(e)}",
+                    "query": query,
+                    "results": []
+                }
             
             # 提取结果
             results = self._extract_results(data)
@@ -154,7 +176,73 @@ class SearchTool(BaseTool):
                     "type": "webpage"
                 })
         
+        # 新闻结果
+        if "news_results" in data:
+            for item in data["news_results"][:3]:
+                results.append({
+                    "title": item.get("title", ""),
+                    "snippet": item.get("snippet", ""),
+                    "link": item.get("link", ""),
+                    "source": "news",
+                    "type": "news"
+                })
+        
+        # 图片结果
+        if "images_results" in data:
+            for item in data["images_results"][:3]:
+                results.append({
+                    "title": item.get("title", ""),
+                    "snippet": item.get("snippet", ""),
+                    "link": item.get("link", ""),
+                    "source": "images",
+                    "type": "image"
+                })
+        
         return results
+    
+    async def search_across_sources(self, query: str, sources: List[str] = None) -> Dict[str, Any]:
+        """
+        跨数据源搜索
+        
+        Args:
+            query: 搜索查询
+            sources: 数据源列表，如 ["web", "news", "images"]
+        
+        Returns:
+            搜索结果
+        """
+        logger.info(f"SearchTool: 跨数据源搜索 - {query}")
+        
+        # 默认数据源
+        if sources is None:
+            sources = ["web"]
+        
+        all_results = []
+        errors = []
+        
+        # 对每个数据源执行搜索
+        for source in sources:
+            try:
+                result = await self.execute({
+                    "query": query,
+                    "source": source
+                })
+                if result.get("success"):
+                    all_results.extend(result.get("results", []))
+                else:
+                    errors.append(f"{source}: {result.get('error', '搜索失败')}")
+            except Exception as e:
+                logger.error(f"跨数据源搜索失败: {e}")
+                errors.append(f"{source}: {str(e)}")
+        
+        return {
+            "success": len(all_results) > 0,
+            "query": query,
+            "sources": sources,
+            "results": all_results,
+            "count": len(all_results),
+            "errors": errors
+        }
     
     def _mock_search(self, query: str) -> Dict[str, Any]:
         """模拟搜索（用于测试）"""

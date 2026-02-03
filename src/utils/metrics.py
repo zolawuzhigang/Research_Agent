@@ -222,3 +222,6 @@ try:
     import asyncio
 except ImportError:
     asyncio = None
+
+# 导入Optional
+from typing import Optional
