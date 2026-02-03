@@ -19,6 +19,7 @@ model:
   api_key: "sk-DwBE5H6xxCV6I7i0q8v6rq3ZHauPuSq6fWVerxu7gJ9DmQoz"
   # API云上模型配置（当 provider="api" 时使用）
   # SiliconFlow OpenAI-compatible endpoint
+<<<<<<< HEAD
 #  deepseek-ai/DeepSeek-V3.2
 #  api_base: "https://api.siliconflow.cn/v1/chat/completions"
 #  api_key: "sk-hwcnbmzkafcexxqedhhdrocicavcekdkojfuqumvdcfxquqg"
@@ -32,6 +33,11 @@ model:
   temperature: 0.1
   max_tokens: 2000
   timeout: 60
+=======
+  api_base: ""
+  api_key: ""
+  
+>>>>>>> 5de83f99c23a76ba3b2b31d9086790ca8e411a2f
   # 本地部署模型配置（当 provider="local" 时使用）
   # model_path: "/path/to/local/model"  # 本地模型路径
   # device: "cuda"  # cuda 或 cpu
@@ -44,7 +50,15 @@ model:
   # max_tokens: 2000
   # timeout: 60
   
+<<<<<<< HEAD
 
+=======
+  # 通用配置
+  model_name: ""  # 模型名称/ID
+  temperature: 0.1
+  max_tokens: 2000
+  timeout: 60
+>>>>>>> 5de83f99c23a76ba3b2b31d9086790ca8e411a2f
 # 任务配置
 task:
   max_retries: 3
@@ -64,7 +78,7 @@ tools:
   enabled: []
   timeout: 10
   max_retries: 2
-  # 豆包策略：是否启用任务先验路由（三层判断：是否调工具/能力标签/属性标签）
+  # 策略：是否启用任务先验路由（三层判断：是否调工具/能力标签/属性标签）
   use_task_router: false
 
 # Skills（可扫描加载的工具）
