@@ -9,6 +9,7 @@ from .time_tool import TimeTool
 from .conversation_history_tool import ConversationHistoryTool
 from .workspace_files_tool import WorkspaceFilesTool
 from .advanced_web_search_tool import AdvancedWebSearchTool
+from .web_search_crawl_tool import WebSearchCrawlTool
 
 __all__ = [
     "ToolRegistry",
@@ -18,4 +19,5 @@ __all__ = [
     "ConversationHistoryTool",
     "WorkspaceFilesTool",
     "AdvancedWebSearchTool",
+    "WebSearchCrawlTool",
 ]

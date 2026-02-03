@@ -73,7 +73,7 @@ class AgentOrchestrator:
     
     def _register_default_tools(self):
         """注册默认工具"""
-        from ..tools import ConversationHistoryTool, AdvancedWebSearchTool
+        from ..tools import ConversationHistoryTool, AdvancedWebSearchTool, WebSearchCrawlTool
         
         # 注册搜索工具
         search_tool = SearchTool()
@@ -85,6 +85,13 @@ class AgentOrchestrator:
             self.tool_registry.register(adv_search_tool)
         except Exception as e:
             logger.warning(f"AdvancedWebSearchTool 初始化失败，跳过: {e}")
+
+        # 注册网络搜索爬取工具（百度/知乎，多步深度，无需 API Key）
+        try:
+            crawl_tool = WebSearchCrawlTool()
+            self.tool_registry.register(crawl_tool)
+        except Exception as e:
+            logger.warning(f"WebSearchCrawlTool 初始化失败，跳过: {e}")
         
         # 注册计算工具
         calc_tool = CalculatorTool()
